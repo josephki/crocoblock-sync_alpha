@@ -1,0 +1,46 @@
+/**
+ * Editor-Stile für IR Tours Sync
+ */
+
+/* Sync Button */
+.ir-sync-button-added {
+    margin: 10px 0;
+}
+
+.ir-sync-button {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    min-height: 32px;
+    padding: 0 12px !important;
+}
+
+/* Status-Anzeige */
+.ir-sync-status {
+    display: inline-block;
+    margin-left: 10px;
+    font-size: 0.9em;
+}
+
+/* Elementor-Anpassungen */
+.elementor-panel .ir-sync-button-added {
+    padding: 10px;
+    margin: 10px 0;
+    background: #f7f7f7;
+    border-radius: 3px;
+}
+
+/* JetEngine-Anpassungen */
+.jet-engine-meta-box .ir-sync-button-added {
+    margin-top: 15px;
+    margin-bottom: 15px;
+}
+
+/* Verbesserte Sichtbarkeit im dunklen Modus */
+.is-dark-theme .ir-sync-status {
+    color: #eee;
+}
+
+.is-dark-theme .ir-sync-button-added {
+    background: rgba(255, 255, 255, 0.1);
+}
