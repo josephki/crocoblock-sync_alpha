@@ -1,74 +1,168 @@
 /**
- * Admin-Stile für IR Tours Sync
+ * Admin-Stile für Crocoblock Sync
  */
 
-/* Einstellungsseite */
+/* Tabellenstile */
 .ir-sync-mappings-table {
-    margin: 20px 0;
     border-collapse: collapse;
+    margin-top: 10px;
     width: 100%;
 }
 
-.ir-sync-mappings-table th,
+.ir-sync-mappings-table th {
+    font-weight: bold;
+    padding: 10px;
+    text-align: left;
+    background-color: #f0f0f1;
+}
+
 .ir-sync-mappings-table td {
     padding: 10px;
     vertical-align: middle;
 }
 
-.ir-sync-mappings-table th {
-    text-align: left;
-    font-weight: bold;
+.ir-sync-mappings-table tr:nth-child(odd) {
     background-color: #f9f9f9;
 }
 
-.ir-sync-mappings-table tr:nth-child(even) {
-    background-color: #f5f5f5;
+/* Feld-Auswahl Container */
+.field-selector-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
 }
 
-.ir-sync-mappings-table tr:hover {
-    background-color: #f0f0f0;
+.field-selector-wrapper input {
+    flex: 1;
 }
 
-/* Button und Aktionen */
-.add-mapping {
-    margin-top: 10px !important;
+.field-selector-button {
+    white-space: nowrap;
 }
 
-.remove-mapping {
-    color: #a00 !important;
+/* Dialog-Stile */
+#field-selector-dialog {
+    padding: 15px;
 }
 
-.remove-mapping:hover {
-    color: #dc3232 !important;
+#field-selector-dialog .dialog-loading {
+    text-align: center;
+    margin: 20px 0;
 }
 
-/* Hilfe-Tooltips */
-.ir-help-icon {
-    cursor: help;
-    color: #0073aa;
-    margin-left: 5px;
+#field-selector-list {
+    width: 100%;
+    height: 200px;
+    border: 1px solid #ddd;
+    padding: 5px;
+    font-family: monospace;
 }
 
-.ir-tooltip {
-    display: none;
-    position: absolute;
-    background: #f0f0f0;
-    border: 1px solid #ccc;
-    padding: 10px;
-    border-radius: 5px;
-    width: 250px;
-    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.1);
-    z-index: 100;
+#field-selector-list option {
+    padding: 5px;
+    cursor: pointer;
 }
 
-/* Responsive */
+#field-selector-list option:hover {
+    background-color: #f0f0f1;
+}
+
+/* Responsive Anpassungen */
 @media screen and (max-width: 782px) {
+    .field-selector-wrapper {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .field-selector-button {
+        margin-top: 5px;
+    }
+    
     .ir-sync-mappings-table {
         display: block;
         overflow-x: auto;
     }
-    
-    .ir-sync-mappings-table input[type="text"] {
-        width: 100%;
-    }
+}
+
+/* Animation für die Hervorhebung von Buttons */
+@keyframes highlight-button {
+    0%, 100% { background-color: #2271b1; }
+    50% { background-color: #135e96; }
+}
+
+.field-selector-button.highlight {
+    animation: highlight-button 1s ease-in-out;
+}
+
+/* jQuery UI Dialog Anpassungen */
+.ui-dialog {
+    z-index: 100102 !important;
+    background: #fff;
+    border: 1px solid #c3c4c7;
+    box-shadow: 0 3px 6px rgba(0, 0, 0, 0.3);
+}
+
+.ui-dialog-titlebar {
+    background: #fff;
+    border-bottom: 1px solid #dcdcde;
+    height: 36px;
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 36px;
+    padding: 0 36px 0 16px;
+}
+
+.ui-button.ui-dialog-titlebar-close {
+    background: none;
+    border: none;
+    box-shadow: none;
+    color: #646970;
+    cursor: pointer;
+    display: block;
+    padding: 0;
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 36px;
+    height: 36px;
+    text-align: center;
+}
+
+.ui-dialog-content {
+    padding: 16px;
+}
+
+.ui-dialog-buttonpane {
+    background: #f6f7f7;
+    border-top: 1px solid #dcdcde;
+    padding: 8px 16px;
+}
+
+.ui-dialog-buttonset {
+    text-align: right;
+}
+
+.ui-dialog-buttonset button {
+    margin-left: 8px;
+}
+
+/* WordPress Admin Stile */
+.wrap h1 {
+    margin-bottom: 15px;
+}
+
+textarea.large-text {
+    width: 100%;
+}
+
+/* Post-Type-Select */
+.post-type-select {
+    width: 100%;
+    max-width: 100%;
+}
+
+/* Remove Button */
+.remove-mapping {
+    color: #a00;
 }

@@ -326,6 +326,11 @@ class Crocoblock_Sync_Core {
             return;
         }
         
+        // Prüfen, ob die Skripte bereits geladen wurden
+        if (wp_script_is('crocoblock-sync-scripts', 'enqueued')) {
+            return;
+        }
+        
         // Mappings abrufen, um relevante Post-Typen zu ermitteln
         $mappings = get_option('ir_sync_field_mappings', array());
         
@@ -351,9 +356,13 @@ class Crocoblock_Sync_Core {
         $general_settings = get_option('ir_sync_general_settings', array());
         $debug_mode = isset($general_settings['debug_mode']) ? $general_settings['debug_mode'] : false;
         
-        // JS-Datei laden
+        // Prüfen, ob wir uns im Elementor-Editor befinden
+        $is_elementor = (isset($_GET['action']) && $_GET['action'] === 'elementor') || 
+                      (isset($_REQUEST['action']) && $_REQUEST['action'] === 'elementor');
+        
+        // JS-Datei laden - einheitlicher Handle-Name
         wp_enqueue_script(
-            'crocoblock-sync-editor',
+            'crocoblock-sync-scripts',
             CROCOBLOCK_SYNC_URL . 'assets/js/editor.js',
             array('jquery', 'wp-data', 'wp-editor'),
             CROCOBLOCK_SYNC_VERSION,
@@ -362,21 +371,50 @@ class Crocoblock_Sync_Core {
         
         // CSS-Datei laden
         wp_enqueue_style(
-            'crocoblock-sync-editor',
+            'crocoblock-sync-styles',
             CROCOBLOCK_SYNC_URL . 'assets/css/editor.css',
             array(),
             CROCOBLOCK_SYNC_VERSION
         );
         
+        // Nachrichten abrufen - stellt sicher, dass der Wert ein Array ist
+        $messages = get_option('ir_sync_messages', array());
+        if (!is_array($messages)) {
+            $messages = array();
+        }
+
+        // Sicherstellen, dass alle erforderlichen Schlüssel vorhanden sind
+        $default_messages = array(
+            'multiple_themes' => 'Sie haben 2 oder mehr Reisethemen gewählt. Sind Sie sicher, dass Sie speichern möchten?',
+            'sync_button' => 'Synchronisieren & Speichern',
+            'sync_reminder' => 'Sie haben vergessen zu synchronisieren. Bitte drücken Sie zuerst den Synchronisations-Button. Danke.',
+            'sync_success' => 'Felder erfolgreich synchronisiert. (%d Terme gesetzt)',
+            'sync_error' => 'Synchronisation fehlgeschlagen. Bitte versuchen Sie es erneut.'
+        );
+
+        // Fehlende Schlüssel aus den Standardwerten ergänzen
+        foreach ($default_messages as $key => $value) {
+            if (!isset($messages[$key]) || empty($messages[$key])) {
+                $messages[$key] = $value;
+            }
+        }
+
+        // Optionales Debug-Logging
+        if ($debug_mode) {
+            error_log('IR Tours Sync - Messages für JavaScript: ' . print_r($messages, true));
+        }
+        
+		
         // Daten für JavaScript bereitstellen
-        wp_localize_script('crocoblock-sync-editor', 'irSyncData', array(
+        wp_localize_script('crocoblock-sync-scripts', 'irSyncData', array(
             'ajaxurl' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce('ir_sync_nonce'),
-            'messages' => get_option('ir_sync_messages', array()),
+            'messages' => $messages,
             'mappings' => $mappings,
             'pluginUrl' => CROCOBLOCK_SYNC_URL,
             'debugMode' => $debug_mode,
-            'postType' => $post->post_type
+            'postType' => $post->post_type,
+            'isElementor' => $is_elementor
         ));
     }
     
@@ -384,70 +422,8 @@ class Crocoblock_Sync_Core {
      * Lädt Skripte und Stile für den Elementor-Editor
      */
     public function enqueue_elementor_scripts() {
-        // Aktuelle Post-ID abrufen
-        $post_id = get_the_ID();
-        if (!$post_id) {
-            return;
-        }
-        
-        $post_type = get_post_type($post_id);
-        if (!$post_type) {
-            return;
-        }
-        
-        // Mappings abrufen
-        $mappings = get_option('ir_sync_field_mappings', array());
-        
-        // Post-Typen aus den Mappings extrahieren
-        $relevant_post_types = array();
-        foreach ($mappings as $mapping) {
-            if ($mapping['active'] && !in_array($mapping['post_type'], $relevant_post_types)) {
-                $relevant_post_types[] = $mapping['post_type'];
-            }
-        }
-        
-        // Wenn keine Mappings definiert sind, Standard-Post-Typ verwenden
-        if (empty($relevant_post_types)) {
-            $relevant_post_types = array('ir-tours');
-        }
-        
-        // Nur für relevante Post-Typen laden
-        if (!in_array($post_type, $relevant_post_types)) {
-            return;
-        }
-        
-        // Allgemeine Einstellungen abrufen
-        $general_settings = get_option('ir_sync_general_settings', array());
-        $debug_mode = isset($general_settings['debug_mode']) ? $general_settings['debug_mode'] : false;
-        
-        // JS-Datei laden
-        wp_enqueue_script(
-            'crocoblock-sync-elementor',
-            CROCOBLOCK_SYNC_URL . 'assets/js/editor.js',
-            array('jquery'),
-            CROCOBLOCK_SYNC_VERSION,
-            true
-        );
-        
-        // CSS-Datei laden
-        wp_enqueue_style(
-            'crocoblock-sync-elementor',
-            CROCOBLOCK_SYNC_URL . 'assets/css/editor.css',
-            array(),
-            CROCOBLOCK_SYNC_VERSION
-        );
-        
-        // Daten für JavaScript bereitstellen
-        wp_localize_script('crocoblock-sync-elementor', 'irSyncData', array(
-            'ajaxurl' => admin_url('admin-ajax.php'),
-            'nonce' => wp_create_nonce('ir_sync_nonce'),
-            'messages' => get_option('ir_sync_messages', array()),
-            'mappings' => $mappings,
-            'pluginUrl' => CROCOBLOCK_SYNC_URL,
-            'debugMode' => $debug_mode,
-            'postType' => $post_type,
-            'isElementor' => true
-        ));
+        // Verwende die gemeinsame Funktion für beide Editoren
+        $this->enqueue_editor_scripts();
     }
 }
 
