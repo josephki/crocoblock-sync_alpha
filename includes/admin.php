@@ -708,10 +708,10 @@ class Crocoblock_Sync_Admin {
         echo '<thead>
                 <tr>
                     <th width="5%">Aktiv</th>
-                    <th width="20%">Meta-Feld</th>
-                    <th width="20%">Taxonomie</th>
-                    <th width="15%">Post-Typ</th>
-                    <th width="15%">Mehrere erlauben</th>
+					<th width="15%">Post-Typ</th>
+					<th width="20%">Meta-Feld</th>
+					<th	width="20%">Taxonomie</th>
+					<th width="15%">Mehrere erlauben</th>
                     <th width="25%">Aktionen</th>
                 </tr>
               </thead>';
@@ -729,9 +729,9 @@ class Crocoblock_Sync_Admin {
         // Template für neue Zeilen
         echo '<script type="text/template" id="mapping-row-template">';
         $this->render_mapping_row('{{id}}', array(
-            'meta_field' => '',
-            'taxonomy' => '',
             'post_type' => 'ir-tours',
+			'meta_field' => '',
+            'taxonomy' => '',
             'active' => true,
             'allow_multiple' => false // Neue Option
         ));
@@ -754,6 +754,7 @@ class Crocoblock_Sync_Admin {
     
     /**
      * Rendert eine einzelne Mapping-Zeile
+	 ++++ 21-04-2025 - reihenfolge geaendert
      */
     private function render_mapping_row($id, $mapping) {
         // Sicherstellen, dass alle Felder existieren (für ältere Installationen)
@@ -769,6 +770,17 @@ class Crocoblock_Sync_Admin {
         // Aktiv-Checkbox
         echo '<td>';
         echo '<input type="checkbox" name="ir_sync_field_mappings[' . esc_attr($id) . '][active]" value="1" ' . checked(true, isset($mapping['active']) ? $mapping['active'] : true, false) . '/>';
+        echo '</td>';
+		
+		// Post-Typ als Dropdown
+        echo '<td>';
+        echo '<select name="ir_sync_field_mappings[' . esc_attr($id) . '][post_type]" class="post-type-select" required>';
+        
+        foreach ($post_types as $post_type) {
+            echo '<option value="' . esc_attr($post_type->name) . '" ' . selected($mapping['post_type'], $post_type->name, false) . '>' . esc_html($post_type->label) . '</option>';
+        }
+        
+        echo '</select>';
         echo '</td>';
         
         // Meta-Feld als Select2 Dropdown
@@ -789,16 +801,7 @@ class Crocoblock_Sync_Admin {
         echo '</select>';
         echo '</td>';
         
-        // Post-Typ als Dropdown
-        echo '<td>';
-        echo '<select name="ir_sync_field_mappings[' . esc_attr($id) . '][post_type]" class="post-type-select" required>';
         
-        foreach ($post_types as $post_type) {
-            echo '<option value="' . esc_attr($post_type->name) . '" ' . selected($mapping['post_type'], $post_type->name, false) . '>' . esc_html($post_type->label) . '</option>';
-        }
-        
-        echo '</select>';
-        echo '</td>';
         
         // Neue Option: Mehrere Einträge erlauben
         echo '<td>';
@@ -864,10 +867,11 @@ class Crocoblock_Sync_Admin {
                 continue; // Überspringe unvollständige Mappings
             }
             
+			/* geaenderte reihenfolge --- 21-04-2025 --- */
             $sanitized_input[$id] = array(
+			    'post_type' => sanitize_text_field($mapping['post_type']),
                 'meta_field' => sanitize_text_field($mapping['meta_field']),
                 'taxonomy' => sanitize_text_field($mapping['taxonomy']),
-                'post_type' => sanitize_text_field($mapping['post_type']),
                 'active' => isset($mapping['active']) ? true : false,
                 'allow_multiple' => isset($mapping['allow_multiple']) ? true : false // Neue Option
             );

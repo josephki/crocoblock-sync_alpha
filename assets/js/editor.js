@@ -15,8 +15,10 @@
         console.log('IR Tours Sync - Debug Info:');
         console.log('irSyncData vollständig:', irSyncData);
         
+        // Debug-Ausgabe der Originalnachrichten
+        console.log('Originale Nachrichten aus irSyncData:', irSyncData.messages);
+        
         // Nachrichten aus den Plugin-Einstellungen mit Fallback-Werten
-        // WICHTIG: Hier werden die Nachrichten direkt aus dem irSyncData-Objekt abgerufen
         let buttonText = 'Synchronisieren & Speichern';
         let multipleThemesMessage = 'Sie haben 2 oder mehr Reisethemen gewählt. Sind Sie sicher, dass Sie speichern möchten?';
         let syncReminderMessage = 'Sie haben vergessen zu synchronisieren. Bitte drücken Sie zuerst den Synchronisations-Button. Danke.';
@@ -27,22 +29,27 @@
         if (irSyncData && irSyncData.messages) {
             if (irSyncData.messages.sync_button && irSyncData.messages.sync_button.trim() !== '') {
                 buttonText = irSyncData.messages.sync_button;
+                console.log('Button-Text überschrieben mit:', buttonText);
             }
             
             if (irSyncData.messages.multiple_themes && irSyncData.messages.multiple_themes.trim() !== '') {
                 multipleThemesMessage = irSyncData.messages.multiple_themes;
+                console.log('Multiple-Themes-Nachricht überschrieben mit:', multipleThemesMessage);
             }
             
             if (irSyncData.messages.sync_reminder && irSyncData.messages.sync_reminder.trim() !== '') {
                 syncReminderMessage = irSyncData.messages.sync_reminder;
+                console.log('Sync-Reminder-Nachricht überschrieben mit:', syncReminderMessage);
             }
             
             if (irSyncData.messages.sync_success && irSyncData.messages.sync_success.trim() !== '') {
                 syncSuccessMessage = irSyncData.messages.sync_success;
+                console.log('Sync-Success-Nachricht überschrieben mit:', syncSuccessMessage);
             }
             
             if (irSyncData.messages.sync_error && irSyncData.messages.sync_error.trim() !== '') {
                 syncErrorMessage = irSyncData.messages.sync_error;
+                console.log('Sync-Error-Nachricht überschrieben mit:', syncErrorMessage);
             }
         }
         
@@ -53,59 +60,48 @@
         console.log('Sync Success:', syncSuccessMessage);
         console.log('Sync Error:', syncErrorMessage);
         
-        // Hilfsfunktion: Prüft, ob mehrere Reisethemen ausgewählt sind
-        function checkMultipleReisethemen() {
-            const reisethemen_mapping = findReisethemenMapping();
-            if (!reisethemen_mapping) {
+        // Hilfsfunktion: Prüft, ob mehrere Terme ausgewählt sind, obwohl nicht erlaubt
+        function checkMultipleTerms() {
+            // Prüfen für alle Mappings
+            if (!irSyncData.mappings) {
+                console.log('Keine Mappings gefunden in irSyncData');
                 return false;
             }
             
-            const meta_field = reisethemen_mapping.meta_field;
-            console.log('Prüfe Reisethemen-Feld:', meta_field);
+            console.log('Verfügbare Mappings:', irSyncData.mappings);
             
-            // Verschiedene Checkbox-Formate überprüfen
-            const jetCheckboxes = $(`input[name^="${meta_field}["][value="true"]:checked`);
-            console.log('JetEngine Checkboxen gefunden:', jetCheckboxes.length);
+            for (const id in irSyncData.mappings) {
+                const mapping = irSyncData.mappings[id];
+                
+                if (mapping.active && (!mapping.allow_multiple || mapping.allow_multiple === false)) {
+                    const meta_field = mapping.meta_field;
+                    console.log('Prüfe Meta-Feld:', meta_field);
+                    
+                    // Verschiedene Checkbox-Formate überprüfen
+                    const jetCheckboxes = $(`input[name^="${meta_field}["][value="true"]:checked`).length;
+                    const standardSelect = $(`select[name^="${meta_field}"] option:selected`).length > 1 ? 
+                                         $(`select[name^="${meta_field}"] option:selected`).length : 0;
+                    const regularCheckboxes = $(`input[name^="${meta_field}"]:checked`).length;
+                    const jetListItems = $(`.jet-engine-checkbox-list__input[name^="${meta_field}"]:checked`).length;
+                    
+                    // Gesamtzahl der ausgewählten Elemente
+                    const totalSelected = jetCheckboxes + standardSelect + regularCheckboxes + jetListItems;
+                    
+                    console.log('Ausgewählte Elemente für', meta_field, ':', totalSelected);
+                    
+                    if (totalSelected >= 2) {
+                        console.log('Mehrere Elemente gefunden, aber nicht erlaubt bei:', meta_field);
+                        return true; // Mehrere nicht erlaubte Terme gefunden
+                    }
+                }
+            }
             
-            // Für Standard-Format (Select/Multiselect)
-            const standardSelect = $(`select[name^="${meta_field}"] option:selected`);
-            console.log('Standard-Select Optionen gefunden:', standardSelect.length);
-            
-            // Für reguläre Checkboxen
-            const regularCheckboxes = $(`input[name^="${meta_field}"]:checked`);
-            console.log('Reguläre Checkboxen gefunden:', regularCheckboxes.length);
-            
-            // Für spezielle Checkbox-Listen in JetEngine
-            const jetListItems = $(`.jet-engine-checkbox-list__input[name^="${meta_field}"]:checked`);
-            console.log('JetEngine Checkbox-Liste gefunden:', jetListItems.length);
-            
-            // Gesamtzahl der ausgewählten Elemente
-            const totalSelected = jetCheckboxes.length + 
-                                 (standardSelect.length > 1 ? standardSelect.length : 0) + 
-                                 regularCheckboxes.length +
-                                 jetListItems.length;
-            
-            console.log('Gesamtanzahl ausgewählter Reisethemen:', totalSelected);
-            
-            return totalSelected >= 2;
+            return false;
         }
         
         // 1. Warnung beim Speichern ohne vorherige Synchronisation
         $(document).on('click', '.editor-post-publish-button, .editor-post-save-draft, .editor-post-publish-panel__toggle, .editor-post-publish-button__button', function(e) {
             console.log('Speichern-Button geklickt');
-            
-            // Prüfen, ob mehrere Reisethemen ausgewählt wurden
-            if (checkMultipleReisethemen()) {
-                console.log('Mehrere Reisethemen erkannt, zeige Warnung');
-                if (!confirm(multipleThemesMessage)) {
-                    console.log('Benutzer hat abgebrochen');
-                    e.preventDefault();
-                    e.stopImmediatePropagation();
-                    return false;
-                } else {
-                    console.log('Benutzer hat bestätigt, fahre fort mit Speichern');
-                }
-            }
             
             // Prüfen, ob Synchronisation notwendig ist
             if (!syncWasClicked) {
@@ -137,10 +133,67 @@
                 
                 // Nur warnen, wenn tatsächlich Felder zu synchronisieren sind
                 if (fieldsToSync) {
+                    console.log('Felder zum Synchronisieren gefunden, zeige Meldung:', syncReminderMessage);
+                    
+                    // Warum das Speichern verhindert werden muss:
                     alert(syncReminderMessage);
+                    
+                    // Wichtig: Alle Events verhindern
                     e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    
+                    // Verhindern, dass Gutenberg speichert
+                    if (typeof wp !== 'undefined' && wp.data && wp.data.dispatch && wp.data.dispatch('core/editor')) {
+                        const saveOperations = ['savePost', 'saveEntityRecord', 'validateSaveCall'];
+                        const originalDispatch = wp.data.dispatch;
+                        
+                        // Temporär die Speicher-Methoden überschreiben
+                        wp.data.dispatch = function(storeName) {
+                            const store = originalDispatch(storeName);
+                            if (storeName === 'core/editor' || storeName === 'core') {
+                                const originalStore = { ...store };
+                                
+                                // Überschreibe die Speicher-Methoden
+                                saveOperations.forEach(op => {
+                                    if (store[op]) {
+                                        store[op] = function() {
+                                            console.log('Speichervorgang abgebrochen wegen fehlender Synchronisation');
+                                            return Promise.resolve({ ok: false });
+                                        };
+                                    }
+                                });
+                                
+                                // Nach kurzer Zeit wiederherstellen
+                                setTimeout(() => {
+                                    wp.data.dispatch = originalDispatch;
+                                }, 500);
+                                
+                                return store;
+                            }
+                            return store;
+                        };
+                    }
+                    
+                    return false;
+                }
+            }
+            
+            // Überprüfen, ob mehrere Terme ausgewählt wurden
+            const hasMultipleTerms = checkMultipleTerms();
+            console.log('Hat mehrere nicht erlaubte Terme:', hasMultipleTerms);
+            
+            // Prüfen, ob mehrere Terme ausgewählt wurden
+            if (hasMultipleTerms) {
+                console.log('Mehrere Terme erkannt, zeige Warnung');
+                if (!confirm(multipleThemesMessage)) {
+                    console.log('Benutzer hat abgebrochen');
+                    e.preventDefault();
+                    e.stopPropagation();
                     e.stopImmediatePropagation();
                     return false;
+                } else {
+                    console.log('Benutzer hat bestätigt, fahre fort mit Speichern');
                 }
             }
         });
@@ -217,13 +270,29 @@
                     
                     if (response.success) {
                         console.log('Synchronisation erfolgreich');
-                        btn.text('✅ Synchronisiert – speichere...');
                         
                         // Erfolgstext formatieren und anzeigen
                         let termCount = 0;
                         if (response.data && typeof response.data.count !== 'undefined') {
                             termCount = response.data.count;
                         }
+                        
+                        // Prüfen, ob eine Warnung angezeigt werden soll
+                        let shouldProceed = true;
+                        if (response.data && response.data.show_warning) {
+                            console.log('Mehrere Terme erkannt, zeige Warnung');
+                            shouldProceed = confirm(multipleThemesMessage);
+                            
+                            if (!shouldProceed) {
+                                console.log('Benutzer hat Speichern abgebrochen');
+                                btn.prop('disabled', false).text(buttonText);
+                                isSyncing = false;
+                                syncStatus.text('Synchronisation abgebrochen.');
+                                return;
+                            }
+                        }
+                        
+                        btn.text('✅ Synchronisiert – speichere...');
                         
                         // Hier wird %d durch die tatsächliche Anzahl ersetzt
                         let successMessage = syncSuccessMessage;

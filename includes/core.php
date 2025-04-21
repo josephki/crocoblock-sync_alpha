@@ -38,8 +38,14 @@ class Crocoblock_Sync_Core {
      */
     public function display_reisethemen_warning() {
         if (isset($_GET['reisethemen_warning']) && $_GET['reisethemen_warning'] === '1') {
+            // Benutzerdefinierte Nachricht aus den Einstellungen holen
+            $messages = get_option('ir_sync_messages', array());
+            $warning_message = isset($messages['multiple_themes']) && !empty($messages['multiple_themes']) 
+                ? $messages['multiple_themes'] 
+                : 'Sie haben mehrere Reisethemen ausgewählt. Sind Sie sicher, dass Sie speichern möchten?';
+            
             echo '<div class="notice notice-warning is-dismissible">
-                <p><strong>Achtung:</strong> Sie haben mehrere Reisethemen ausgewählt.</p>
+                <p><strong>Achtung:</strong> ' . esc_html($warning_message) . '</p>
             </div>';
         }
     }
@@ -99,13 +105,16 @@ class Crocoblock_Sync_Core {
             
             $results[$mapping['meta_field']] = $result;
             
-            // Prüfen, ob es sich um Reisethemen handelt und ob mehrere ausgewählt sind
-            if ($mapping['taxonomy'] === 'reisethemen' && $result && isset($result['terms']) && count($result['terms']) >= 2) {
+            // Prüfen, ob mehrere Terme ausgewählt sind und ob dies erlaubt ist
+            if ($result && 
+                isset($result['terms']) && 
+                count($result['terms']) >= 2 && 
+                (!isset($mapping['allow_multiple']) || !$mapping['allow_multiple'])) {
                 $multiple_themes_warning = true;
             }
         }
         
-        // Warnung setzen, wenn mehrere Reisethemen ausgewählt sind
+        // Warnung setzen, wenn mehrere Terme ausgewählt sind
         if ($multiple_themes_warning) {
             add_filter('redirect_post_location', function($location) {
                 return add_query_arg('reisethemen_warning', '1', $location);
@@ -303,6 +312,33 @@ class Crocoblock_Sync_Core {
             return;
         }
         
+        // Prüfen, ob mehrere Terme gefunden wurden und ob dies erlaubt ist
+        $multiple_terms_detected = false;
+        foreach ($results as $field => $result) {
+            if ($result && 
+                isset($result['terms']) && 
+                count($result['terms']) >= 2) {
+                
+                // Finde das entsprechende Mapping für dieses Feld
+                $mapping_found = false;
+                foreach ($relevant_mappings as $mapping) {
+                    if ($mapping['meta_field'] === $field) {
+                        $mapping_found = true;
+                        if (!isset($mapping['allow_multiple']) || !$mapping['allow_multiple']) {
+                            $multiple_terms_detected = true;
+                            break 2; // Beide Schleifen verlassen
+                        }
+                    }
+                }
+                
+                // Wenn kein Mapping gefunden wurde, vorsichtshalber Warnung setzen
+                if (!$mapping_found) {
+                    $multiple_terms_detected = true;
+                    break;
+                }
+            }
+        }
+        
         // Erfolg
         $messages = get_option('ir_sync_messages', array());
         $success_message = isset($messages['sync_success']) 
@@ -312,111 +348,114 @@ class Crocoblock_Sync_Core {
         wp_send_json_success(array(
             'message' => $success_message,
             'count' => $term_count,
-            'fields' => array_keys($results)
+            'fields' => array_keys($results),
+            'show_warning' => $multiple_terms_detected // Neue Eigenschaft für die Warnung
         ));
     }
     
     /**
      * Lädt Skripte und Stile für den Block-Editor
      */
-    public function enqueue_editor_scripts() {
-        global $post;
-        
-        if (!$post) {
-            return;
-        }
-        
-        // Prüfen, ob die Skripte bereits geladen wurden
-        if (wp_script_is('crocoblock-sync-scripts', 'enqueued')) {
-            return;
-        }
-        
-        // Mappings abrufen, um relevante Post-Typen zu ermitteln
-        $mappings = get_option('ir_sync_field_mappings', array());
-        
-        // Post-Typen aus den Mappings extrahieren
-        $relevant_post_types = array();
-        foreach ($mappings as $mapping) {
-            if ($mapping['active'] && !in_array($mapping['post_type'], $relevant_post_types)) {
-                $relevant_post_types[] = $mapping['post_type'];
-            }
-        }
-        
-        // Wenn keine Mappings definiert sind, Standard-Post-Typ verwenden
-        if (empty($relevant_post_types)) {
-            $relevant_post_types = array('ir-tours');
-        }
-        
-        // Nur für relevante Post-Typen laden
-        if (!in_array($post->post_type, $relevant_post_types)) {
-            return;
-        }
-        
-        // Allgemeine Einstellungen abrufen
-        $general_settings = get_option('ir_sync_general_settings', array());
-        $debug_mode = isset($general_settings['debug_mode']) ? $general_settings['debug_mode'] : false;
-        
-        // Prüfen, ob wir uns im Elementor-Editor befinden
-        $is_elementor = (isset($_GET['action']) && $_GET['action'] === 'elementor') || 
-                      (isset($_REQUEST['action']) && $_REQUEST['action'] === 'elementor');
-        
-        // JS-Datei laden - einheitlicher Handle-Name
-        wp_enqueue_script(
-            'crocoblock-sync-scripts',
-            CROCOBLOCK_SYNC_URL . 'assets/js/editor.js',
-            array('jquery', 'wp-data', 'wp-editor'),
-            CROCOBLOCK_SYNC_VERSION,
-            true
-        );
-        
-        // CSS-Datei laden
-        wp_enqueue_style(
-            'crocoblock-sync-styles',
-            CROCOBLOCK_SYNC_URL . 'assets/css/editor.css',
-            array(),
-            CROCOBLOCK_SYNC_VERSION
-        );
-        
-        // Nachrichten abrufen - stellt sicher, dass der Wert ein Array ist
-        $messages = get_option('ir_sync_messages', array());
-        if (!is_array($messages)) {
-            $messages = array();
-        }
-
-        // Sicherstellen, dass alle erforderlichen Schlüssel vorhanden sind
-        $default_messages = array(
-            'multiple_themes' => 'Sie haben 2 oder mehr Reisethemen gewählt. Sind Sie sicher, dass Sie speichern möchten?',
-            'sync_button' => 'Synchronisieren & Speichern',
-            'sync_reminder' => 'Sie haben vergessen zu synchronisieren. Bitte drücken Sie zuerst den Synchronisations-Button. Danke.',
-            'sync_success' => 'Felder erfolgreich synchronisiert. (%d Terme gesetzt)',
-            'sync_error' => 'Synchronisation fehlgeschlagen. Bitte versuchen Sie es erneut.'
-        );
-
-        // Fehlende Schlüssel aus den Standardwerten ergänzen
-        foreach ($default_messages as $key => $value) {
-            if (!isset($messages[$key]) || empty($messages[$key])) {
-                $messages[$key] = $value;
-            }
-        }
-
-        // Optionales Debug-Logging
-        if ($debug_mode) {
-            error_log('IR Tours Sync - Messages für JavaScript: ' . print_r($messages, true));
-        }
-        
-		
-        // Daten für JavaScript bereitstellen
-        wp_localize_script('crocoblock-sync-scripts', 'irSyncData', array(
-            'ajaxurl' => admin_url('admin-ajax.php'),
-            'nonce' => wp_create_nonce('ir_sync_nonce'),
-            'messages' => $messages,
-            'mappings' => $mappings,
-            'pluginUrl' => CROCOBLOCK_SYNC_URL,
-            'debugMode' => $debug_mode,
-            'postType' => $post->post_type,
-            'isElementor' => $is_elementor
-        ));
+	/**
+ * Sicherstellen, dass benutzerdefinierte Nachrichten korrekt geladen und weitergegeben werden
+ */
+public function enqueue_editor_scripts() {
+    global $post;
+    
+    if (!$post) {
+        return;
     }
+    
+    // Prüfen, ob die Skripte bereits geladen wurden
+    if (wp_script_is('crocoblock-sync-scripts', 'enqueued')) {
+        return;
+    }
+    
+    // Mappings abrufen, um relevante Post-Typen zu ermitteln
+    $mappings = get_option('ir_sync_field_mappings', array());
+    
+    // Post-Typen aus den Mappings extrahieren
+    $relevant_post_types = array();
+    foreach ($mappings as $mapping) {
+        if ($mapping['active'] && !in_array($mapping['post_type'], $relevant_post_types)) {
+            $relevant_post_types[] = $mapping['post_type'];
+        }
+    }
+    
+    // Wenn keine Mappings definiert sind, Standard-Post-Typ verwenden
+    if (empty($relevant_post_types)) {
+        $relevant_post_types = array('ir-tours');
+    }
+    
+    // Nur für relevante Post-Typen laden
+    if (!in_array($post->post_type, $relevant_post_types)) {
+        return;
+    }
+    
+    // Allgemeine Einstellungen abrufen
+    $general_settings = get_option('ir_sync_general_settings', array());
+    $debug_mode = isset($general_settings['debug_mode']) ? $general_settings['debug_mode'] : false;
+    
+    // Prüfen, ob wir uns im Elementor-Editor befinden
+    $is_elementor = (isset($_GET['action']) && $_GET['action'] === 'elementor') || 
+                  (isset($_REQUEST['action']) && $_REQUEST['action'] === 'elementor');
+    
+    // JS-Datei laden - einheitlicher Handle-Name
+    wp_enqueue_script(
+        'crocoblock-sync-scripts',
+        CROCOBLOCK_SYNC_URL . 'assets/js/editor.js',
+        array('jquery', 'wp-data', 'wp-editor'),
+        CROCOBLOCK_SYNC_VERSION,
+        true
+    );
+    
+    // CSS-Datei laden
+    wp_enqueue_style(
+        'crocoblock-sync-styles',
+        CROCOBLOCK_SYNC_URL . 'assets/css/editor.css',
+        array(),
+        CROCOBLOCK_SYNC_VERSION
+    );
+    
+    // Nachrichten abrufen - stellt sicher, dass der Wert ein Array ist
+    $messages = get_option('ir_sync_messages', array());
+    if (!is_array($messages)) {
+        $messages = array();
+    }
+
+    // Sicherstellen, dass alle erforderlichen Schlüssel vorhanden sind
+    $default_messages = array(
+        'multiple_themes' => 'Sie haben 2 oder mehr Reisethemen gewählt. Sind Sie sicher, dass Sie speichern möchten?',
+        'sync_button' => 'Synchronisieren & Speichern',
+        'sync_reminder' => 'Sie haben vergessen zu synchronisieren. Bitte drücken Sie zuerst den Synchronisations-Button. Danke.',
+        'sync_success' => 'Felder erfolgreich synchronisiert. (%d Terme gesetzt)',
+        'sync_error' => 'Synchronisation fehlgeschlagen. Bitte versuchen Sie es erneut.'
+    );
+
+    // Fehlende Schlüssel aus den Standardwerten ergänzen
+    foreach ($default_messages as $key => $value) {
+        if (!isset($messages[$key]) || empty($messages[$key])) {
+            $messages[$key] = $value;
+        }
+    }
+
+    // Optionales Debug-Logging
+    if ($debug_mode) {
+        error_log('IR Tours Sync - Messages für JavaScript: ' . print_r($messages, true));
+    }
+    
+    // Daten für JavaScript bereitstellen - wichtig: sicherstellen, dass messages korrekt übergeben wird
+    wp_localize_script('crocoblock-sync-scripts', 'irSyncData', array(
+        'ajaxurl' => admin_url('admin-ajax.php'),
+        'nonce' => wp_create_nonce('ir_sync_nonce'),
+        'messages' => $messages, // Benutzerdefinierte Nachrichten
+        'mappings' => $mappings,
+        'pluginUrl' => CROCOBLOCK_SYNC_URL,
+        'debugMode' => $debug_mode,
+        'postType' => $post->post_type,
+        'isElementor' => $is_elementor
+    ));
+}
     
     /**
      * Lädt Skripte und Stile für den Elementor-Editor
