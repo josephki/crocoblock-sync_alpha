@@ -231,127 +231,167 @@ class Crocoblock_Sync_Core {
         wp_send_json_error('Sie müssen angemeldet sein, um diese Aktion durchführen zu können.');
     }
     
-    /**
-     * AJAX-Handler für die manuelle Synchronisation
-     */
-    public function ajax_manual_sync() {
-        // Nonce prüfen
-        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'ir_sync_nonce')) {
-            wp_send_json_error('Sicherheitsüberprüfung fehlgeschlagen.');
-            return;
-        }
+	/**
+	 * AJAX-Handler für die manuelle Synchronisation
+	 */
+	public function ajax_manual_sync() {
+		// Nonce prüfen
+		if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'ir_sync_nonce')) {
+			wp_send_json_error('Sicherheitsüberprüfung fehlgeschlagen.');
+			return;
+		}
 
-        // Berechtigungen prüfen
-        if (!current_user_can('edit_posts')) {
-            wp_send_json_error('Nicht erlaubt.');
-            return;
-        }
+		// Berechtigungen prüfen
+		if (!current_user_can('edit_posts')) {
+			wp_send_json_error('Nicht erlaubt.');
+			return;
+		}
 
-        // Post-ID validieren
-        $post_id = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
-        if (!$post_id) {
-            wp_send_json_error('Keine gültige Post-ID angegeben.');
-            return;
+		// Post-ID validieren
+		$post_id = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
+		if (!$post_id) {
+			wp_send_json_error('Keine gültige Post-ID angegeben.');
+			return;
+		}
+		
+		// Post-Typ abrufen
+		$post_type = get_post_type($post_id);
+		if (!$post_type) {
+			wp_send_json_error('Ungültiger Beitragstyp.');
+			return;
+		}
+		
+		// Prüfen, ob der Beitrag bereits gespeichert wurde
+		$post_status = get_post_status($post_id);
+		$post = get_post($post_id);
+		
+		if ($post_status === 'auto-draft' || $post_status === false || empty($post_status) || 
+			($post && $post->post_status === 'auto-draft')) {
+			wp_send_json_error('Bitte speichern Sie den Beitrag zuerst als Entwurf oder veröffentlichen Sie ihn, bevor Sie synchronisieren.');
+			return;
+		}
+		
+		// Prüfen, ob Meta-Felder existieren bevor wir versuchen zu synchronisieren
+		$mappings = get_option('ir_sync_field_mappings', array());
+		$meta_fields_exist = true;
+		$missing_fields = array();
+		
+		foreach ($mappings as $mapping) {
+			if ($mapping['active'] && $mapping['post_type'] === $post_type) {
+				if (!metadata_exists('post', $post_id, $mapping['meta_field'])) {
+					$meta_fields_exist = false;
+					$missing_fields[] = $mapping['meta_field'];
+				}
+			}
+		}
+    
+    // Wenn Meta-Felder fehlen, gib eine spezifische Fehlermeldung zurück
+    if (!$meta_fields_exist) {
+        wp_send_json_error('Bitte speichern Sie den Beitrag zuerst als Entwurf oder veröffentlichen Sie ihn, bevor Sie synchronisieren. Die folgenden Felder wurden nicht gefunden: ' . implode(', ', $missing_fields));
+        return;
+    }
+
+    // Mappings abrufen
+    $relevant_mappings = array();
+    foreach ($mappings as $mapping) {
+        if ($mapping['active'] && $mapping['post_type'] === $post_type) {
+            $relevant_mappings[] = $mapping;
         }
+    }
+    
+    // Wenn keine relevanten Mappings gefunden wurden
+    if (empty($relevant_mappings)) {
+        wp_send_json_error('Keine Mapping-Konfigurationen für diesen Beitragstyp gefunden.');
+        return;
+    }
+
+    // Alle relevanten Felder synchronisieren
+    $results = array();
+    foreach ($relevant_mappings as $mapping) {
+        $result = $this->sync_single_field(
+            $post_id,
+            $mapping['meta_field'],
+            $mapping['taxonomy']
+        );
         
-        // Post-Typ abrufen
-        $post_type = get_post_type($post_id);
-        if (!$post_type) {
-            wp_send_json_error('Ungültiger Beitragstyp.');
-            return;
+        $results[$mapping['meta_field']] = $result;
+    }
+    
+    // Erfolgs- und Fehlerfälle zählen
+    $success_count = 0;
+    $error_messages = array();
+    $term_count = 0;
+    
+    foreach ($results as $field => $result) {
+        if ($result === false) {
+            $error_messages[] = "Feld $field: Konnte nicht synchronisiert werden.";
+        } else if ($result['status'] === 'error') {
+            $error_messages[] = "Feld $field: " . $result['error'];
+        } else {
+            $success_count++;
+            $term_count += count($result['terms']);
         }
-
-        // Mappings abrufen
-        $mappings = get_option('ir_sync_field_mappings', array());
-        
-        // Prüfen, ob Mappings für diesen Post-Typ existieren
-        $relevant_mappings = array();
-        foreach ($mappings as $mapping) {
-            if ($mapping['active'] && $mapping['post_type'] === $post_type) {
-                $relevant_mappings[] = $mapping;
-            }
-        }
-        
-        // Wenn keine relevanten Mappings gefunden wurden
-        if (empty($relevant_mappings)) {
-            wp_send_json_error('Keine Mapping-Konfigurationen für diesen Beitragstyp gefunden.');
-            return;
-        }
-
-        // Alle relevanten Felder synchronisieren
-        $results = array();
+    }
+    
+    // Wenn Fehler aufgetreten sind
+    if (!empty($error_messages)) {
+        // Spezielle Behandlung für Fehler, die durch fehlende Meta-Felder verursacht werden
+        $test_all_fields_missing = true;
         foreach ($relevant_mappings as $mapping) {
-            $result = $this->sync_single_field(
-                $post_id,
-                $mapping['meta_field'],
-                $mapping['taxonomy']
-            );
-            
-            $results[$mapping['meta_field']] = $result;
-        }
-        
-        // Erfolgs- und Fehlerfälle zählen
-        $success_count = 0;
-        $error_messages = array();
-        $term_count = 0;
-        
-        foreach ($results as $field => $result) {
-            if ($result === false) {
-                $error_messages[] = "Feld $field: Konnte nicht synchronisiert werden.";
-            } else if ($result['status'] === 'error') {
-                $error_messages[] = "Feld $field: " . $result['error'];
-            } else {
-                $success_count++;
-                $term_count += count($result['terms']);
+            if (metadata_exists('post', $post_id, $mapping['meta_field'])) {
+                $test_all_fields_missing = false;
+                break;
             }
         }
         
-        // Wenn Fehler aufgetreten sind
-        if (!empty($error_messages)) {
+        if ($test_all_fields_missing) {
+            wp_send_json_error('Bitte speichern Sie den Beitrag zuerst als Entwurf oder veröffentlichen Sie ihn, bevor Sie synchronisieren.');
+        } else {
             wp_send_json_error(implode('<br>', $error_messages));
-            return;
         }
-        
-        // Prüfen, ob mehrere Terme gefunden wurden und ob dies erlaubt ist
-        $multiple_terms_detected = false;
-        foreach ($results as $field => $result) {
-            if ($result && 
-                isset($result['terms']) && 
-                count($result['terms']) >= 2) {
-                
-                // Finde das entsprechende Mapping für dieses Feld
-                $mapping_found = false;
-                foreach ($relevant_mappings as $mapping) {
-                    if ($mapping['meta_field'] === $field) {
-                        $mapping_found = true;
-                        if (!isset($mapping['allow_multiple']) || !$mapping['allow_multiple']) {
-                            $multiple_terms_detected = true;
-                            break 2; // Beide Schleifen verlassen
-                        }
+        return;
+    }
+    
+    // Prüfen, ob mehrere Terme gefunden wurden und ob dies erlaubt ist
+    $multiple_terms_detected = false;
+    foreach ($results as $field => $result) {
+        if ($result && 
+            isset($result['terms']) && 
+            count($result['terms']) >= 2) {
+            
+            // Finde das entsprechende Mapping für dieses Feld
+            $mapping_found = false;
+            foreach ($relevant_mappings as $mapping) {
+                if ($mapping['meta_field'] === $field) {
+                    $mapping_found = true;
+                    if (!isset($mapping['allow_multiple']) || !$mapping['allow_multiple']) {
+                        $multiple_terms_detected = true;
+                        break 2; // Beide Schleifen verlassen
                     }
                 }
-                
-                // Wenn kein Mapping gefunden wurde, vorsichtshalber Warnung setzen
-                if (!$mapping_found) {
-                    $multiple_terms_detected = true;
-                    break;
-                }
+            }
+            
+            // Wenn kein Mapping gefunden wurde, vorsichtshalber Warnung setzen
+            if (!$mapping_found) {
+                $multiple_terms_detected = true;
+                break;
             }
         }
-        
-        // Erfolg
-        $messages = get_option('ir_sync_messages', array());
-        $success_message = isset($messages['sync_success']) 
-            ? sprintf($messages['sync_success'], $term_count)
-            : sprintf('Felder erfolgreich synchronisiert. (%d Terme gesetzt)', $term_count);
-        
-        wp_send_json_success(array(
-            'message' => $success_message,
-            'count' => $term_count,
-            'fields' => array_keys($results),
-            'show_warning' => $multiple_terms_detected // Neue Eigenschaft für die Warnung
-        ));
     }
+    
+    // Erfolg
+    $messages = get_option('ir_sync_messages', array());
+    $success_message = isset($messages['sync_success']) 
+        ? sprintf($messages['sync_success'], $term_count)
+        : sprintf('Felder erfolgreich synchronisiert. (%d Terme gesetzt)', $term_count);
+    
+    wp_send_json_success(array(
+        'message' => $success_message,
+        'count' => $term_count,
+        'fields' => array_keys($results),
+        'show_warning' => $multiple_terms_detected // Neue Eigenschaft für die Warnung
+    ));
+}
     
     /**
      * Lädt Skripte und Stile für den Block-Editor
