@@ -566,7 +566,6 @@ class Crocoblock_Sync_Admin {
      * Registriert die Plugin-Einstellungen
      */
     public function register_settings() {
-        // Die restliche Funktion bleibt unverändert
         // Einstellungs-Gruppe registrieren
         register_setting(
             'ir_sync_settings_group',
@@ -626,7 +625,8 @@ class Crocoblock_Sync_Admin {
             'sync_button' => 'Text für Sync-Button',
             'sync_reminder' => 'Erinnerung zum Synchronisieren',
             'sync_success' => 'Erfolgreiche Synchronisation (%d für Anzahl)',
-            'sync_error' => 'Fehlermeldung bei Synchronisation'
+            'sync_error' => 'Fehlermeldung bei Synchronisation',
+            'terms_created' => 'Neue Terms erstellt (%s für Liste der Terms)'
         );
         
         foreach ($message_fields as $key => $label) {
@@ -641,7 +641,6 @@ class Crocoblock_Sync_Admin {
         }
     }
     
-    // Der Rest der Klasse bleibt unverändert
     /**
      * Render-Funktion für allgemeine Einstellungen
      */
@@ -708,10 +707,10 @@ class Crocoblock_Sync_Admin {
         echo '<thead>
                 <tr>
                     <th width="5%">Aktiv</th>
-					<th width="15%">Post-Typ</th>
-					<th width="20%">Meta-Feld</th>
-					<th	width="20%">Taxonomie</th>
-					<th width="15%">Mehrere erlauben</th>
+                    <th width="15%">Post-Typ</th>
+                    <th width="20%">Meta-Feld</th>
+                    <th	width="20%">Taxonomie</th>
+                    <th width="15%">Mehrere erlauben</th>
                     <th width="25%">Aktionen</th>
                 </tr>
               </thead>';
@@ -730,7 +729,7 @@ class Crocoblock_Sync_Admin {
         echo '<script type="text/template" id="mapping-row-template">';
         $this->render_mapping_row('{{id}}', array(
             'post_type' => 'ir-tours',
-			'meta_field' => '',
+            'meta_field' => '',
             'taxonomy' => '',
             'active' => true,
             'allow_multiple' => false // Neue Option
@@ -754,7 +753,6 @@ class Crocoblock_Sync_Admin {
     
     /**
      * Rendert eine einzelne Mapping-Zeile
-	 ++++ 21-04-2025 - reihenfolge geaendert
      */
     private function render_mapping_row($id, $mapping) {
         // Sicherstellen, dass alle Felder existieren (für ältere Installationen)
@@ -771,8 +769,8 @@ class Crocoblock_Sync_Admin {
         echo '<td>';
         echo '<input type="checkbox" name="ir_sync_field_mappings[' . esc_attr($id) . '][active]" value="1" ' . checked(true, isset($mapping['active']) ? $mapping['active'] : true, false) . '/>';
         echo '</td>';
-		
-		// Post-Typ als Dropdown
+        
+        // Post-Typ als Dropdown
         echo '<td>';
         echo '<select name="ir_sync_field_mappings[' . esc_attr($id) . '][post_type]" class="post-type-select" required>';
         
@@ -800,8 +798,6 @@ class Crocoblock_Sync_Admin {
         }
         echo '</select>';
         echo '</td>';
-        
-        
         
         // Neue Option: Mehrere Einträge erlauben
         echo '<td>';
@@ -840,7 +836,8 @@ class Crocoblock_Sync_Admin {
             'sync_button' => 'Synchronisieren & Speichern',
             'sync_reminder' => 'Sie haben vergessen zu synchronisieren. Bitte drücken Sie zuerst den Synchronisations-Button. Danke.',
             'sync_success' => 'Felder erfolgreich synchronisiert. (%d Terme gesetzt)',
-            'sync_error' => 'Synchronisation fehlgeschlagen. Bitte versuchen Sie es erneut.'
+            'sync_error' => 'Synchronisation fehlgeschlagen. Bitte versuchen Sie es erneut.',
+            'terms_created' => 'Neue Terms erstellt: %s'
         );
         
         $message = isset($messages[$message_key]) ? $messages[$message_key] : $default_messages[$message_key];
@@ -849,6 +846,8 @@ class Crocoblock_Sync_Admin {
         
         if ($message_key === 'sync_success') {
             echo '<p class="description">Verwenden Sie %d als Platzhalter für die Anzahl der synchronisierten Terme.</p>';
+        } else if ($message_key === 'terms_created') {
+            echo '<p class="description">Verwenden Sie %s als Platzhalter für die Liste der neu erstellten Terme.</p>';
         }
     }
     
@@ -867,9 +866,9 @@ class Crocoblock_Sync_Admin {
                 continue; // Überspringe unvollständige Mappings
             }
             
-			/* geaenderte reihenfolge --- 21-04-2025 --- */
+            /* geaenderte reihenfolge --- 21-04-2025 --- */
             $sanitized_input[$id] = array(
-			    'post_type' => sanitize_text_field($mapping['post_type']),
+                'post_type' => sanitize_text_field($mapping['post_type']),
                 'meta_field' => sanitize_text_field($mapping['meta_field']),
                 'taxonomy' => sanitize_text_field($mapping['taxonomy']),
                 'active' => isset($mapping['active']) ? true : false,
@@ -892,7 +891,8 @@ class Crocoblock_Sync_Admin {
             'sync_button' => 'Synchronisieren & Speichern',
             'sync_reminder' => 'Sie haben vergessen zu synchronisieren. Bitte drücken Sie zuerst den Synchronisations-Button. Danke.',
             'sync_success' => 'Felder erfolgreich synchronisiert. (%d Terme gesetzt)',
-            'sync_error' => 'Synchronisation fehlgeschlagen. Bitte versuchen Sie es erneut.'
+            'sync_error' => 'Synchronisation fehlgeschlagen. Bitte versuchen Sie es erneut.',
+            'terms_created' => 'Neue Terms erstellt: %s'
         );
         
         foreach ($default_messages as $key => $default) {

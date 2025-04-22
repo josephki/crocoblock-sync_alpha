@@ -24,6 +24,7 @@
         let syncReminderMessage = 'Sie haben vergessen zu synchronisieren. Bitte drücken Sie zuerst den Synchronisations-Button. Danke.';
         let syncSuccessMessage = 'Felder erfolgreich synchronisiert. (%d Terme gesetzt)';
         let syncErrorMessage = 'Synchronisation fehlgeschlagen. Bitte versuchen Sie es erneut.';
+        let termsCreatedMessage = 'Neue Terms erstellt: %s';
         
         // Nachrichten direkt mit Werten aus irSyncData überschreiben, wenn verfügbar
         if (irSyncData && irSyncData.messages) {
@@ -51,6 +52,11 @@
                 syncErrorMessage = irSyncData.messages.sync_error;
                 console.log('Sync-Error-Nachricht überschrieben mit:', syncErrorMessage);
             }
+            
+            if (irSyncData.messages.terms_created && irSyncData.messages.terms_created.trim() !== '') {
+                termsCreatedMessage = irSyncData.messages.terms_created;
+                console.log('Terms-Created-Nachricht überschrieben mit:', termsCreatedMessage);
+            }
         }
         
         console.log('Verwendete Nachrichten:');
@@ -59,6 +65,7 @@
         console.log('Sync Reminder:', syncReminderMessage);
         console.log('Sync Success:', syncSuccessMessage);
         console.log('Sync Error:', syncErrorMessage);
+        console.log('Terms Created:', termsCreatedMessage);
         
         // Hilfsfunktion: Prüft, ob mehrere Terme ausgewählt sind, obwohl nicht erlaubt
         function checkMultipleTerms() {
@@ -273,8 +280,15 @@
                         
                         // Erfolgstext formatieren und anzeigen
                         let termCount = 0;
+                        let createdTerms = [];
+                        
                         if (response.data && typeof response.data.count !== 'undefined') {
                             termCount = response.data.count;
+                        }
+                        
+                        // Neu erstellte Terms erfassen
+                        if (response.data && response.data.created_terms && response.data.created_terms.length > 0) {
+                            createdTerms = response.data.created_terms;
                         }
                         
                         // Prüfen, ob eine Warnung angezeigt werden soll
@@ -297,6 +311,12 @@
                         // Hier wird %d durch die tatsächliche Anzahl ersetzt
                         let successMessage = syncSuccessMessage;
                         successMessage = successMessage.replace(/%d/g, termCount);
+                        
+                        // Meldung über neu erstellte Terms ergänzen, falls vorhanden
+                        if (createdTerms.length > 0) {
+                            let formattedTermsCreatedMessage = termsCreatedMessage.replace(/%s/g, createdTerms.join(', '));
+                            successMessage += ' ' + formattedTermsCreatedMessage;
+                        }
                         
                         console.log('Formatierte Erfolgsmeldung:', successMessage);
                         syncStatus.text('Letzte Synchronisation: erfolgreich');
@@ -361,79 +381,79 @@
                             btn.prop('disabled', false).text(buttonText);
                             isSyncing = false;
                         }
-						
+                        
                     } 
-					// Dieser Abschnitt ersetzt den else-Block in der AJAX-Antwortbehandlung
-					else {
-						console.error('Synchronisation fehlgeschlagen:', response.data);
-						
-						// Spezifische Behandlung für "nicht gespeicherten" Beitrag
-						let errorMsg = '';
-						let isNotSavedError = false;
-						
-						if (response.data && typeof response.data === 'string') {
-							// Prüft verschiedene mögliche Fehlermeldungen für nicht gespeicherte Beiträge
-							if (response.data.includes('Bitte speichern Sie den Beitrag zuerst') || 
-								(response.data.includes('Konnte nicht synchronisiert werden') && 
-								 (response.data.includes('reisethemen_meta') || response.data.includes('kontinent')))) {
-								
-								isNotSavedError = true;
-								errorMsg = 'Bitte speichern Sie den Beitrag zuerst als Entwurf oder veröffentlichen Sie ihn, bevor Sie synchronisieren.';
-								
-								// Status auf klare Anweisung setzen
-								syncStatus.html('<strong style="color:#d63638;">Bitte zuerst als Entwurf speichern oder veröffentlichen</strong>');
-								
-								// Temporären Hilfe-Button einfügen, der auf "Entwurf speichern" klickt
-								const saveBtn = $('.editor-post-save-draft');
-								if (saveBtn.length) {
-									// Entferne vorhandene temporäre Buttons, falls vorhanden
-									$('.temp-save-draft-btn').remove();
-									
-									const helpBtn = $('<button type="button" class="components-button is-secondary temp-save-draft-btn" style="margin-left:10px;">Jetzt als Entwurf speichern</button>');
-									
-									// Temporären Button neben dem Synchronisierungs-Button einfügen
-									btn.after(helpBtn);
-									
-									// Event-Handler für den Hilfe-Button
-									helpBtn.on('click', function() {
-										$(this).prop('disabled', true).text('Speichere...');
-										saveBtn.trigger('click');
-										
-										// Nach einer kurzen Verzögerung den temporären Button entfernen
-										setTimeout(() => {
-											$(this).remove();
-										}, 2000);
-									});
-									
-									// Button nach einiger Zeit automatisch entfernen
-									setTimeout(() => {
-										$('.temp-save-draft-btn').fadeOut(function() {
-											$(this).remove();
-										});
-									}, 15000);
-								}
-							} else {
-								// Standard-Fehlerbehandlung für andere Fehler
-								errorMsg = (response.data && typeof response.data === 'string') ? 
-									response.data : syncErrorMessage;
-							}
-						} else {
-							errorMsg = syncErrorMessage;
-						}
-						
-						btn.text('❌ Fehler');
-						
-						if (!isNotSavedError) {
-							syncStatus.text('Letzte Synchronisation: fehlgeschlagen');
-						}
-						
-						alert('Fehler bei der Synchronisation: ' + errorMsg);
-						
-						setTimeout(() => {
-							btn.prop('disabled', false).text(buttonText);
-							isSyncing = false;
-						}, 3000);
-					}
+                    // Dieser Abschnitt ersetzt den else-Block in der AJAX-Antwortbehandlung
+                    else {
+                        console.error('Synchronisation fehlgeschlagen:', response.data);
+                        
+                        // Spezifische Behandlung für "nicht gespeicherten" Beitrag
+                        let errorMsg = '';
+                        let isNotSavedError = false;
+                        
+                        if (response.data && typeof response.data === 'string') {
+                            // Prüft verschiedene mögliche Fehlermeldungen für nicht gespeicherte Beiträge
+                            if (response.data.includes('Bitte speichern Sie den Beitrag zuerst') || 
+                                (response.data.includes('Konnte nicht synchronisiert werden') && 
+                                 (response.data.includes('reisethemen_meta') || response.data.includes('kontinent')))) {
+                                
+                                isNotSavedError = true;
+                                errorMsg = 'Bitte speichern Sie den Beitrag zuerst als Entwurf oder veröffentlichen Sie ihn, bevor Sie synchronisieren.';
+                                
+                                // Status auf klare Anweisung setzen
+                                syncStatus.html('<strong style="color:#d63638;">Bitte zuerst als Entwurf speichern oder veröffentlichen</strong>');
+                                
+                                // Temporären Hilfe-Button einfügen, der auf "Entwurf speichern" klickt
+                                const saveBtn = $('.editor-post-save-draft');
+                                if (saveBtn.length) {
+                                    // Entferne vorhandene temporäre Buttons, falls vorhanden
+                                    $('.temp-save-draft-btn').remove();
+                                    
+                                    const helpBtn = $('<button type="button" class="components-button is-secondary temp-save-draft-btn" style="margin-left:10px;">Jetzt als Entwurf speichern</button>');
+                                    
+                                    // Temporären Button neben dem Synchronisierungs-Button einfügen
+                                    btn.after(helpBtn);
+                                    
+                                    // Event-Handler für den Hilfe-Button
+                                    helpBtn.on('click', function() {
+                                        $(this).prop('disabled', true).text('Speichere...');
+                                        saveBtn.trigger('click');
+                                        
+                                        // Nach einer kurzen Verzögerung den temporären Button entfernen
+                                        setTimeout(() => {
+                                            $(this).remove();
+                                        }, 2000);
+                                    });
+                                    
+                                    // Button nach einiger Zeit automatisch entfernen
+                                    setTimeout(() => {
+                                        $('.temp-save-draft-btn').fadeOut(function() {
+                                            $(this).remove();
+                                        });
+                                    }, 15000);
+                                }
+                            } else {
+                                // Standard-Fehlerbehandlung für andere Fehler
+                                errorMsg = (response.data && typeof response.data === 'string') ? 
+                                    response.data : syncErrorMessage;
+                            }
+                        } else {
+                            errorMsg = syncErrorMessage;
+                        }
+                        
+                        btn.text('❌ Fehler');
+                        
+                        if (!isNotSavedError) {
+                            syncStatus.text('Letzte Synchronisation: fehlgeschlagen');
+                        }
+                        
+                        alert('Fehler bei der Synchronisation: ' + errorMsg);
+                        
+                        setTimeout(() => {
+                            btn.prop('disabled', false).text(buttonText);
+                            isSyncing = false;
+                        }, 3000);
+                    }
                 }).fail(function(xhr, status, error) {
                     console.error('AJAX-Anfrage fehlgeschlagen:', error);
                     

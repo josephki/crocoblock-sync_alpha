@@ -127,6 +127,7 @@ class Crocoblock_Sync_Core {
     
     /**
      * Synchronisiert ein einzelnes Feld mit einer Taxonomie
+     * Wenn ein Term in der Taxonomie nicht existiert, wird er automatisch angelegt
      * 
      * @param int $post_id Die Post-ID
      * @param string $meta_field Name des Meta-Feldes
@@ -172,13 +173,19 @@ class Crocoblock_Sync_Core {
             return !empty($term) && $term !== 'false';
         });
 
-        // Alphabetisch sortieren
+        // Für die Erfassung neu erstellter Terms
+        $created_terms = array();
+        
+        // Alphabetisch sortieren und Terms verarbeiten
         $terms_sorted = array();
         foreach ($selected_terms as $term_id_or_slug) {
             $term = null;
+            
+            // Wenn es eine Zahl ist, versuche es als ID zu interpretieren
             if (is_numeric($term_id_or_slug)) {
                 $term = get_term_by('id', intval($term_id_or_slug), $taxonomy);
             } else {
+                // Versuche zuerst, den Term über den Slug zu finden
                 $term = get_term_by('slug', sanitize_text_field($term_id_or_slug), $taxonomy);
                 
                 // Wenn kein Term gefunden wurde, versuche es mit dem Namen
@@ -186,11 +193,15 @@ class Crocoblock_Sync_Core {
                     $term = get_term_by('name', sanitize_text_field($term_id_or_slug), $taxonomy);
                 }
                 
-                // Wenn immer noch kein Term gefunden wurde, versuche einen zu erstellen
+                // Wenn immer noch kein Term gefunden wurde, erstelle einen neuen Term
                 if (!$term && !is_numeric($term_id_or_slug)) {
-                    $new_term = wp_insert_term(sanitize_text_field($term_id_or_slug), $taxonomy);
+                    $term_name = sanitize_text_field($term_id_or_slug);
+                    $new_term = wp_insert_term($term_name, $taxonomy);
+                    
                     if (!is_wp_error($new_term)) {
                         $term = get_term_by('id', $new_term['term_id'], $taxonomy);
+                        // Erfassen des neu erstellten Terms
+                        $created_terms[] = $term_name;
                     }
                 }
             }
@@ -220,6 +231,7 @@ class Crocoblock_Sync_Core {
             'meta_field' => $meta_field,
             'taxonomy' => $taxonomy,
             'terms' => array_values($terms_sorted),
+            'created_terms' => $created_terms, // Neu erstellte Terms zurückgeben
             'error' => is_wp_error($result) ? $result->get_error_message() : null
         );
     }
@@ -231,271 +243,290 @@ class Crocoblock_Sync_Core {
         wp_send_json_error('Sie müssen angemeldet sein, um diese Aktion durchführen zu können.');
     }
     
-	/**
-	 * AJAX-Handler für die manuelle Synchronisation
-	 */
-	public function ajax_manual_sync() {
-		// Nonce prüfen
-		if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'ir_sync_nonce')) {
-			wp_send_json_error('Sicherheitsüberprüfung fehlgeschlagen.');
-			return;
-		}
-
-		// Berechtigungen prüfen
-		if (!current_user_can('edit_posts')) {
-			wp_send_json_error('Nicht erlaubt.');
-			return;
-		}
-
-		// Post-ID validieren
-		$post_id = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
-		if (!$post_id) {
-			wp_send_json_error('Keine gültige Post-ID angegeben.');
-			return;
-		}
-		
-		// Post-Typ abrufen
-		$post_type = get_post_type($post_id);
-		if (!$post_type) {
-			wp_send_json_error('Ungültiger Beitragstyp.');
-			return;
-		}
-		
-		// Prüfen, ob der Beitrag bereits gespeichert wurde
-		$post_status = get_post_status($post_id);
-		$post = get_post($post_id);
-		
-		if ($post_status === 'auto-draft' || $post_status === false || empty($post_status) || 
-			($post && $post->post_status === 'auto-draft')) {
-			wp_send_json_error('Bitte speichern Sie den Beitrag zuerst als Entwurf oder veröffentlichen Sie ihn, bevor Sie synchronisieren.');
-			return;
-		}
-		
-		// Prüfen, ob Meta-Felder existieren bevor wir versuchen zu synchronisieren
-		$mappings = get_option('ir_sync_field_mappings', array());
-		$meta_fields_exist = true;
-		$missing_fields = array();
-		
-		foreach ($mappings as $mapping) {
-			if ($mapping['active'] && $mapping['post_type'] === $post_type) {
-				if (!metadata_exists('post', $post_id, $mapping['meta_field'])) {
-					$meta_fields_exist = false;
-					$missing_fields[] = $mapping['meta_field'];
-				}
-			}
-		}
-    
-    // Wenn Meta-Felder fehlen, gib eine spezifische Fehlermeldung zurück
-    if (!$meta_fields_exist) {
-        wp_send_json_error('Bitte speichern Sie den Beitrag zuerst als Entwurf oder veröffentlichen Sie ihn, bevor Sie synchronisieren. Die folgenden Felder wurden nicht gefunden: ' . implode(', ', $missing_fields));
-        return;
-    }
-
-    // Mappings abrufen
-    $relevant_mappings = array();
-    foreach ($mappings as $mapping) {
-        if ($mapping['active'] && $mapping['post_type'] === $post_type) {
-            $relevant_mappings[] = $mapping;
+    /**
+     * AJAX-Handler für die manuelle Synchronisation
+     */
+    public function ajax_manual_sync() {
+        // Nonce prüfen
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'ir_sync_nonce')) {
+            wp_send_json_error('Sicherheitsüberprüfung fehlgeschlagen.');
+            return;
         }
-    }
-    
-    // Wenn keine relevanten Mappings gefunden wurden
-    if (empty($relevant_mappings)) {
-        wp_send_json_error('Keine Mapping-Konfigurationen für diesen Beitragstyp gefunden.');
-        return;
-    }
 
-    // Alle relevanten Felder synchronisieren
-    $results = array();
-    foreach ($relevant_mappings as $mapping) {
-        $result = $this->sync_single_field(
-            $post_id,
-            $mapping['meta_field'],
-            $mapping['taxonomy']
-        );
+        // Berechtigungen prüfen
+        if (!current_user_can('edit_posts')) {
+            wp_send_json_error('Nicht erlaubt.');
+            return;
+        }
+
+        // Post-ID validieren
+        $post_id = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
+        if (!$post_id) {
+            wp_send_json_error('Keine gültige Post-ID angegeben.');
+            return;
+        }
         
-        $results[$mapping['meta_field']] = $result;
-    }
-    
-    // Erfolgs- und Fehlerfälle zählen
-    $success_count = 0;
-    $error_messages = array();
-    $term_count = 0;
-    
-    foreach ($results as $field => $result) {
-        if ($result === false) {
-            $error_messages[] = "Feld $field: Konnte nicht synchronisiert werden.";
-        } else if ($result['status'] === 'error') {
-            $error_messages[] = "Feld $field: " . $result['error'];
-        } else {
-            $success_count++;
-            $term_count += count($result['terms']);
+        // Post-Typ abrufen
+        $post_type = get_post_type($post_id);
+        if (!$post_type) {
+            wp_send_json_error('Ungültiger Beitragstyp.');
+            return;
         }
-    }
+        
+        // Prüfen, ob der Beitrag bereits gespeichert wurde
+        $post_status = get_post_status($post_id);
+        $post = get_post($post_id);
+        
+        if ($post_status === 'auto-draft' || $post_status === false || empty($post_status) || 
+            ($post && $post->post_status === 'auto-draft')) {
+            wp_send_json_error('Bitte speichern Sie den Beitrag zuerst als Entwurf oder veröffentlichen Sie ihn, bevor Sie synchronisieren.');
+            return;
+        }
+        
+        // Prüfen, ob Meta-Felder existieren bevor wir versuchen zu synchronisieren
+        $mappings = get_option('ir_sync_field_mappings', array());
+        $meta_fields_exist = true;
+        $missing_fields = array();
+        
+        foreach ($mappings as $mapping) {
+            if ($mapping['active'] && $mapping['post_type'] === $post_type) {
+                if (!metadata_exists('post', $post_id, $mapping['meta_field'])) {
+                    $meta_fields_exist = false;
+                    $missing_fields[] = $mapping['meta_field'];
+                }
+            }
+        }
     
-    // Wenn Fehler aufgetreten sind
-    if (!empty($error_messages)) {
-        // Spezielle Behandlung für Fehler, die durch fehlende Meta-Felder verursacht werden
-        $test_all_fields_missing = true;
-        foreach ($relevant_mappings as $mapping) {
-            if (metadata_exists('post', $post_id, $mapping['meta_field'])) {
-                $test_all_fields_missing = false;
-                break;
+        // Wenn Meta-Felder fehlen, gib eine spezifische Fehlermeldung zurück
+        if (!$meta_fields_exist) {
+            wp_send_json_error('Bitte speichern Sie den Beitrag zuerst als Entwurf oder veröffentlichen Sie ihn, bevor Sie synchronisieren. Die folgenden Felder wurden nicht gefunden: ' . implode(', ', $missing_fields));
+            return;
+        }
+
+        // Mappings abrufen
+        $relevant_mappings = array();
+        foreach ($mappings as $mapping) {
+            if ($mapping['active'] && $mapping['post_type'] === $post_type) {
+                $relevant_mappings[] = $mapping;
             }
         }
         
-        if ($test_all_fields_missing) {
-            wp_send_json_error('Bitte speichern Sie den Beitrag zuerst als Entwurf oder veröffentlichen Sie ihn, bevor Sie synchronisieren.');
-        } else {
-            wp_send_json_error(implode('<br>', $error_messages));
+        // Wenn keine relevanten Mappings gefunden wurden
+        if (empty($relevant_mappings)) {
+            wp_send_json_error('Keine Mapping-Konfigurationen für diesen Beitragstyp gefunden.');
+            return;
         }
-        return;
-    }
-    
-    // Prüfen, ob mehrere Terme gefunden wurden und ob dies erlaubt ist
-    $multiple_terms_detected = false;
-    foreach ($results as $field => $result) {
-        if ($result && 
-            isset($result['terms']) && 
-            count($result['terms']) >= 2) {
+
+        // Alle relevanten Felder synchronisieren
+        $results = array();
+        foreach ($relevant_mappings as $mapping) {
+            $result = $this->sync_single_field(
+                $post_id,
+                $mapping['meta_field'],
+                $mapping['taxonomy']
+            );
             
-            // Finde das entsprechende Mapping für dieses Feld
-            $mapping_found = false;
-            foreach ($relevant_mappings as $mapping) {
-                if ($mapping['meta_field'] === $field) {
-                    $mapping_found = true;
-                    if (!isset($mapping['allow_multiple']) || !$mapping['allow_multiple']) {
-                        $multiple_terms_detected = true;
-                        break 2; // Beide Schleifen verlassen
+            $results[$mapping['meta_field']] = $result;
+        }
+        
+        // Erfolgs- und Fehlerfälle zählen
+        $success_count = 0;
+        $error_messages = array();
+        $term_count = 0;
+        $created_terms = array(); // Neu erstellte Terms sammeln
+
+        foreach ($results as $field => $result) {
+            if ($result === false) {
+                $error_messages[] = "Feld $field: Konnte nicht synchronisiert werden.";
+            } else if ($result['status'] === 'error') {
+                $error_messages[] = "Feld $field: " . $result['error'];
+            } else {
+                $success_count++;
+                $term_count += count($result['terms']);
+                
+                // Neu erstellte Terms erfassen
+                if (isset($result['created_terms']) && !empty($result['created_terms'])) {
+                    foreach ($result['created_terms'] as $created_term) {
+                        $created_terms[] = $created_term;
                     }
                 }
             }
+        }
+        
+        // Wenn Fehler aufgetreten sind
+        if (!empty($error_messages)) {
+            // Spezielle Behandlung für Fehler, die durch fehlende Meta-Felder verursacht werden
+            $test_all_fields_missing = true;
+            foreach ($relevant_mappings as $mapping) {
+                if (metadata_exists('post', $post_id, $mapping['meta_field'])) {
+                    $test_all_fields_missing = false;
+                    break;
+                }
+            }
             
-            // Wenn kein Mapping gefunden wurde, vorsichtshalber Warnung setzen
-            if (!$mapping_found) {
-                $multiple_terms_detected = true;
-                break;
+            if ($test_all_fields_missing) {
+                wp_send_json_error('Bitte speichern Sie den Beitrag zuerst als Entwurf oder veröffentlichen Sie ihn, bevor Sie synchronisieren.');
+            } else {
+                wp_send_json_error(implode('<br>', $error_messages));
+            }
+            return;
+        }
+        
+        // Prüfen, ob mehrere Terme gefunden wurden und ob dies erlaubt ist
+        $multiple_terms_detected = false;
+        foreach ($results as $field => $result) {
+            if ($result && 
+                isset($result['terms']) && 
+                count($result['terms']) >= 2) {
+                
+                // Finde das entsprechende Mapping für dieses Feld
+                $mapping_found = false;
+                foreach ($relevant_mappings as $mapping) {
+                    if ($mapping['meta_field'] === $field) {
+                        $mapping_found = true;
+                        if (!isset($mapping['allow_multiple']) || !$mapping['allow_multiple']) {
+                            $multiple_terms_detected = true;
+                            break 2; // Beide Schleifen verlassen
+                        }
+                    }
+                }
+                
+                // Wenn kein Mapping gefunden wurde, vorsichtshalber Warnung setzen
+                if (!$mapping_found) {
+                    $multiple_terms_detected = true;
+                    break;
+                }
             }
         }
+        
+        // Erfolg
+        $messages = get_option('ir_sync_messages', array());
+        $success_message = isset($messages['sync_success']) 
+            ? sprintf($messages['sync_success'], $term_count)
+            : sprintf('Felder erfolgreich synchronisiert. (%d Terme gesetzt)', $term_count);
+        
+        // Füge eine Nachricht über neu erstellte Terms hinzu, wenn vorhanden
+        if (!empty($created_terms)) {
+            $terms_created_message = isset($messages['terms_created']) 
+                ? sprintf($messages['terms_created'], implode(', ', $created_terms))
+                : sprintf('Neue Terms erstellt: %s', implode(', ', $created_terms));
+                
+            $success_message .= ' ' . $terms_created_message;
+        }
+        
+        wp_send_json_success(array(
+            'message' => $success_message,
+            'count' => $term_count,
+            'fields' => array_keys($results),
+            'show_warning' => $multiple_terms_detected,
+            'created_terms' => $created_terms // Neu erstellte Terms an die Antwort anhängen
+        ));
     }
-    
-    // Erfolg
-    $messages = get_option('ir_sync_messages', array());
-    $success_message = isset($messages['sync_success']) 
-        ? sprintf($messages['sync_success'], $term_count)
-        : sprintf('Felder erfolgreich synchronisiert. (%d Terme gesetzt)', $term_count);
-    
-    wp_send_json_success(array(
-        'message' => $success_message,
-        'count' => $term_count,
-        'fields' => array_keys($results),
-        'show_warning' => $multiple_terms_detected // Neue Eigenschaft für die Warnung
-    ));
-}
     
     /**
      * Lädt Skripte und Stile für den Block-Editor
      */
-	/**
- * Sicherstellen, dass benutzerdefinierte Nachrichten korrekt geladen und weitergegeben werden
- */
-public function enqueue_editor_scripts() {
-    global $post;
-    
-    if (!$post) {
-        return;
-    }
-    
-    // Prüfen, ob die Skripte bereits geladen wurden
-    if (wp_script_is('crocoblock-sync-scripts', 'enqueued')) {
-        return;
-    }
-    
-    // Mappings abrufen, um relevante Post-Typen zu ermitteln
-    $mappings = get_option('ir_sync_field_mappings', array());
-    
-    // Post-Typen aus den Mappings extrahieren
-    $relevant_post_types = array();
-    foreach ($mappings as $mapping) {
-        if ($mapping['active'] && !in_array($mapping['post_type'], $relevant_post_types)) {
-            $relevant_post_types[] = $mapping['post_type'];
+    /**
+     * Sicherstellen, dass benutzerdefinierte Nachrichten korrekt geladen und weitergegeben werden
+     */
+    public function enqueue_editor_scripts() {
+        global $post;
+        
+        if (!$post) {
+            return;
         }
-    }
-    
-    // Wenn keine Mappings definiert sind, Standard-Post-Typ verwenden
-    if (empty($relevant_post_types)) {
-        $relevant_post_types = array('ir-tours');
-    }
-    
-    // Nur für relevante Post-Typen laden
-    if (!in_array($post->post_type, $relevant_post_types)) {
-        return;
-    }
-    
-    // Allgemeine Einstellungen abrufen
-    $general_settings = get_option('ir_sync_general_settings', array());
-    $debug_mode = isset($general_settings['debug_mode']) ? $general_settings['debug_mode'] : false;
-    
-    // Prüfen, ob wir uns im Elementor-Editor befinden
-    $is_elementor = (isset($_GET['action']) && $_GET['action'] === 'elementor') || 
-                  (isset($_REQUEST['action']) && $_REQUEST['action'] === 'elementor');
-    
-    // JS-Datei laden - einheitlicher Handle-Name
-    wp_enqueue_script(
-        'crocoblock-sync-scripts',
-        CROCOBLOCK_SYNC_URL . 'assets/js/editor.js',
-        array('jquery', 'wp-data', 'wp-editor'),
-        CROCOBLOCK_SYNC_VERSION,
-        true
-    );
-    
-    // CSS-Datei laden
-    wp_enqueue_style(
-        'crocoblock-sync-styles',
-        CROCOBLOCK_SYNC_URL . 'assets/css/editor.css',
-        array(),
-        CROCOBLOCK_SYNC_VERSION
-    );
-    
-    // Nachrichten abrufen - stellt sicher, dass der Wert ein Array ist
-    $messages = get_option('ir_sync_messages', array());
-    if (!is_array($messages)) {
-        $messages = array();
-    }
-
-    // Sicherstellen, dass alle erforderlichen Schlüssel vorhanden sind
-    $default_messages = array(
-        'multiple_themes' => 'Sie haben 2 oder mehr Reisethemen gewählt. Sind Sie sicher, dass Sie speichern möchten?',
-        'sync_button' => 'Synchronisieren & Speichern',
-        'sync_reminder' => 'Sie haben vergessen zu synchronisieren. Bitte drücken Sie zuerst den Synchronisations-Button. Danke.',
-        'sync_success' => 'Felder erfolgreich synchronisiert. (%d Terme gesetzt)',
-        'sync_error' => 'Synchronisation fehlgeschlagen. Bitte versuchen Sie es erneut.'
-    );
-
-    // Fehlende Schlüssel aus den Standardwerten ergänzen
-    foreach ($default_messages as $key => $value) {
-        if (!isset($messages[$key]) || empty($messages[$key])) {
-            $messages[$key] = $value;
+        
+        // Prüfen, ob die Skripte bereits geladen wurden
+        if (wp_script_is('crocoblock-sync-scripts', 'enqueued')) {
+            return;
         }
-    }
+        
+        // Mappings abrufen, um relevante Post-Typen zu ermitteln
+        $mappings = get_option('ir_sync_field_mappings', array());
+        
+        // Post-Typen aus den Mappings extrahieren
+        $relevant_post_types = array();
+        foreach ($mappings as $mapping) {
+            if ($mapping['active'] && !in_array($mapping['post_type'], $relevant_post_types)) {
+                $relevant_post_types[] = $mapping['post_type'];
+            }
+        }
+        
+        // Wenn keine Mappings definiert sind, Standard-Post-Typ verwenden
+        if (empty($relevant_post_types)) {
+            $relevant_post_types = array('ir-tours');
+        }
+        
+        // Nur für relevante Post-Typen laden
+        if (!in_array($post->post_type, $relevant_post_types)) {
+            return;
+        }
+        
+        // Allgemeine Einstellungen abrufen
+        $general_settings = get_option('ir_sync_general_settings', array());
+        $debug_mode = isset($general_settings['debug_mode']) ? $general_settings['debug_mode'] : false;
+        
+        // Prüfen, ob wir uns im Elementor-Editor befinden
+        $is_elementor = (isset($_GET['action']) && $_GET['action'] === 'elementor') || 
+                      (isset($_REQUEST['action']) && $_REQUEST['action'] === 'elementor');
+        
+        // JS-Datei laden - einheitlicher Handle-Name
+        wp_enqueue_script(
+            'crocoblock-sync-scripts',
+            CROCOBLOCK_SYNC_URL . 'assets/js/editor.js',
+            array('jquery', 'wp-data', 'wp-editor'),
+            CROCOBLOCK_SYNC_VERSION,
+            true
+        );
+        
+        // CSS-Datei laden
+        wp_enqueue_style(
+            'crocoblock-sync-styles',
+            CROCOBLOCK_SYNC_URL . 'assets/css/editor.css',
+            array(),
+            CROCOBLOCK_SYNC_VERSION
+        );
+        
+        // Nachrichten abrufen - stellt sicher, dass der Wert ein Array ist
+        $messages = get_option('ir_sync_messages', array());
+        if (!is_array($messages)) {
+            $messages = array();
+        }
 
-    // Optionales Debug-Logging
-    if ($debug_mode) {
-        error_log('IR Tours Sync - Messages für JavaScript: ' . print_r($messages, true));
+        // Sicherstellen, dass alle erforderlichen Schlüssel vorhanden sind
+        $default_messages = array(
+            'multiple_themes' => 'Sie haben 2 oder mehr Reisethemen gewählt. Sind Sie sicher, dass Sie speichern möchten?',
+            'sync_button' => 'Synchronisieren & Speichern',
+            'sync_reminder' => 'Sie haben vergessen zu synchronisieren. Bitte drücken Sie zuerst den Synchronisations-Button. Danke.',
+            'sync_success' => 'Felder erfolgreich synchronisiert. (%d Terme gesetzt)',
+            'sync_error' => 'Synchronisation fehlgeschlagen. Bitte versuchen Sie es erneut.',
+            'terms_created' => 'Neue Terms erstellt: %s' // Neue Nachricht für erstellte Terms
+        );
+
+        // Fehlende Schlüssel aus den Standardwerten ergänzen
+        foreach ($default_messages as $key => $value) {
+            if (!isset($messages[$key]) || empty($messages[$key])) {
+                $messages[$key] = $value;
+            }
+        }
+
+        // Optionales Debug-Logging
+        if ($debug_mode) {
+            error_log('IR Tours Sync - Messages für JavaScript: ' . print_r($messages, true));
+        }
+        
+        // Daten für JavaScript bereitstellen - wichtig: sicherstellen, dass messages korrekt übergeben wird
+        wp_localize_script('crocoblock-sync-scripts', 'irSyncData', array(
+            'ajaxurl' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('ir_sync_nonce'),
+            'messages' => $messages, // Benutzerdefinierte Nachrichten
+            'mappings' => $mappings,
+            'pluginUrl' => CROCOBLOCK_SYNC_URL,
+            'debugMode' => $debug_mode,
+            'postType' => $post->post_type,
+            'isElementor' => $is_elementor
+        ));
     }
-    
-    // Daten für JavaScript bereitstellen - wichtig: sicherstellen, dass messages korrekt übergeben wird
-    wp_localize_script('crocoblock-sync-scripts', 'irSyncData', array(
-        'ajaxurl' => admin_url('admin-ajax.php'),
-        'nonce' => wp_create_nonce('ir_sync_nonce'),
-        'messages' => $messages, // Benutzerdefinierte Nachrichten
-        'mappings' => $mappings,
-        'pluginUrl' => CROCOBLOCK_SYNC_URL,
-        'debugMode' => $debug_mode,
-        'postType' => $post->post_type,
-        'isElementor' => $is_elementor
-    ));
-}
     
     /**
      * Lädt Skripte und Stile für den Elementor-Editor
