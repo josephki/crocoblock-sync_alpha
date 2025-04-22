@@ -131,9 +131,9 @@
                         }
                     });
                 } else {
-                    // Fallback zu Standard-Feldern
-                    const jetCheckboxes = $('input[name^="reisethemen_meta["][value="true"]:checked');
-                    if (jetCheckboxes.length > 0) {
+                    // Fallback zu genereller Prüfung auf Formularelemente
+                    const formElements = $('select[name*="tax_input"], input[type="checkbox"][name*="tax_input"]:checked');
+                    if (formElements.length > 0) {
                         fieldsToSync = true;
                     }
                 }
@@ -155,8 +155,8 @@
                         const saveOperations = ['savePost', 'saveEntityRecord', 'validateSaveCall'];
                         const originalDispatch = wp.data.dispatch;
                         
-                        // Temporär die Speicher-Methoden überschreiben
-                        wp.data.dispatch = function(storeName) {
+                        // Anstelle von direkter Überschreibung einen Wrapper erstellen
+                        const proxyDispatch = function(storeName) {
                             const store = originalDispatch(storeName);
                             if (storeName === 'core/editor' || storeName === 'core') {
                                 const originalStore = { ...store };
@@ -171,19 +171,45 @@
                                     }
                                 });
                                 
-                                // Nach kurzer Zeit wiederherstellen
-                                setTimeout(() => {
-                                    wp.data.dispatch = originalDispatch;
-                                }, 500);
-                                
                                 return store;
                             }
                             return store;
                         };
+                        
+                        // Temporär die Dispatcher-Funktion durch Proxy ersetzen
+                        // Dabei nicht direkt die Eigenschaft überschreiben
+                        const originalSelect = wp.data.select;
+                        const originalRegistry = wp.data.registry;
+                        
+                        // Verwende einen Monkey-Patch auf Select statt auf Dispatch
+                        wp.data.select = function(storeName) {
+                            // Bei Speicheranfragen intervenieren
+                            if (storeName === 'core/editor') {
+                                console.log('Speicheranfrage abgefangen');
+                                // Abfangen von Speicheraktionen, wenn die Store-Anfrage von einem Save-Versuch kommt
+                                const stack = new Error().stack;
+                                if (stack && (stack.includes('savePost') || stack.includes('save'))) {
+                                    return {}; // Leeren Store zurückgeben
+                                }
+                            }
+                            return originalSelect(storeName);
+                        };
+                        
+                        // Nach kurzer Zeit wiederherstellen
+                        setTimeout(() => {
+                            wp.data.select = originalSelect;
+                        }, 500);
                     }
                     
                     return false;
                 }
+            }
+            
+            // Wenn der Sync-Button bereits geklickt wurde, zeigen wir die Warnung bei mehreren Termen nicht erneut an
+            // Da dies bereits bei der Synchronisation abgefangen wurde
+            if (syncWasClicked) {
+                console.log('Synchronisation bereits durchgeführt, keine weitere Warnung nötig');
+                return; // Normale Speicherung fortsetzen
             }
             
             // Überprüfen, ob mehrere Terme ausgewählt wurden
@@ -205,15 +231,15 @@
             }
         });
         
-        // Hilfsfunktion: Finde das Reisethemen-Mapping
-        function findReisethemenMapping() {
+        // Hilfsfunktion: Findet ein Mapping für eine bestimmte Taxonomie
+        function findTaxonomyMapping(taxonomyName) {
             if (!irSyncData.mappings) {
                 return null;
             }
             
             let result = null;
             $.each(irSyncData.mappings, function(id, mapping) {
-                if (mapping.active && mapping.taxonomy === 'reisethemen') {
+                if (mapping.active && mapping.taxonomy === taxonomyName) {
                     result = mapping;
                     return false; // Schleife abbrechen
                 }
@@ -278,7 +304,7 @@
                     if (response.success) {
                         console.log('Synchronisation erfolgreich');
                         
-                        // Erfolgstext formatieren und anzeigen
+                        // Variablen sichern, bevor die Antwort verarbeitet wird
                         let termCount = 0;
                         let createdTerms = [];
                         
@@ -289,6 +315,15 @@
                         // Neu erstellte Terms erfassen
                         if (response.data && response.data.created_terms && response.data.created_terms.length > 0) {
                             createdTerms = response.data.created_terms;
+                        }
+                        
+                        // Aktualisierte Taxonomien aus der Antwort abrufen und UI aktualisieren
+                        if (response.data && response.data.updated_taxonomies) {
+                            console.log('Aktualisierte Taxonomien empfangen:', response.data.updated_taxonomies);
+                            updateUIWithNewTerms(response.data.updated_taxonomies);
+                            
+                            // Direkte Aktualisierung spezieller Meta-Felder für alle aktualisierten Taxonomien
+                            processMetaFieldsUpdate(response.data.updated_taxonomies);
                         }
                         
                         // Prüfen, ob eine Warnung angezeigt werden soll
@@ -308,9 +343,33 @@
                         
                         btn.text('✅ Synchronisiert – speichere...');
                         
-                        // Hier wird %d durch die tatsächliche Anzahl ersetzt
-                        let successMessage = syncSuccessMessage;
-                        successMessage = successMessage.replace(/%d/g, termCount);
+                        // Berechne die tatsächliche Anzahl der synchronisierten Terms
+                        if (response.data && response.data.updated_taxonomies) {
+                            // Zähle die Gesamtzahl der Terms in allen aktualisierten Taxonomien
+                            let total_terms_all_taxonomies = 0;
+                            let termsPerTaxonomy = {};
+                            
+                            for (const taxonomy in response.data.updated_taxonomies) {
+                                const taxonomyTerms = response.data.updated_taxonomies[taxonomy];
+                                termsPerTaxonomy[taxonomy] = taxonomyTerms.length;
+                                total_terms_all_taxonomies += taxonomyTerms.length;
+                                console.log(`Taxonomie ${taxonomy}: ${taxonomyTerms.length} Terms verfügbar`);
+                            }
+                            
+                            console.log(`Gesamtanzahl aller Terms in allen Taxonomien: ${total_terms_all_taxonomies}`);
+                            
+                            // Fallback: Wenn die termCount zu niedrig aussieht (oft der Fall bei Dropdown-Feldern)
+                            if (termCount < 1 && total_terms_all_taxonomies > 0) {
+                                // Wir nehmen die Anzahl der aktualisierten Taxonomien als Mindestanzahl
+                                termCount = Math.max(Object.keys(response.data.updated_taxonomies).length, 1);
+                                console.log(`Term-Anzahl korrigiert auf: ${termCount}`);
+                            }
+                            
+                            console.log(`Endgültige Term-Anzahl für die Erfolgsmeldung: ${termCount}`);
+                        } 
+                        
+                        // Format-String mit der anzuzeigenden Anzahl ersetzen
+                        let successMessage = syncSuccessMessage.replace(/%d/g, termCount);
                         
                         // Meldung über neu erstellte Terms ergänzen, falls vorhanden
                         if (createdTerms.length > 0) {
@@ -333,7 +392,11 @@
                                     // Erfolgsmeldung anzeigen
                                     alert(successMessage);
                                     
-                                    setTimeout(() => { isSyncing = false; }, 1000);
+                                    // Nach dem erfolgreichen Speichern die Seite neu laden
+                                    setTimeout(() => { 
+                                        isSyncing = false;
+                                        window.location.reload();
+                                    }, 1000);
                                 }).catch(error => {
                                     console.error('Speichern fehlgeschlagen:', error);
                                     syncStatus.text('Fehler beim Speichern');
@@ -359,7 +422,11 @@
                                     // Erfolgsmeldung anzeigen
                                     alert(successMessage);
                                     
-                                    setTimeout(() => { isSyncing = false; }, 1000);
+                                    // Nach dem erfolgreichen Speichern die Seite neu laden
+                                    setTimeout(() => { 
+                                        isSyncing = false;
+                                        window.location.reload();
+                                    }, 1000);
                                 }).catch(error => {
                                     console.error('Speichern fehlgeschlagen:', error);
                                     syncStatus.text('Fehler beim Speichern');
@@ -380,6 +447,11 @@
                             alert(successMessage + '\n\nBitte speichern Sie den Beitrag jetzt manuell.');
                             btn.prop('disabled', false).text(buttonText);
                             isSyncing = false;
+                            
+                            // Dem Benutzer Zeit zum manuellen Speichern geben, dann reload
+                            setTimeout(() => {
+                                window.location.reload();
+                            }, 5000); // 5 Sekunden Wartezeit für manuelles Speichern
                         }
                         
                     } 
@@ -394,8 +466,7 @@
                         if (response.data && typeof response.data === 'string') {
                             // Prüft verschiedene mögliche Fehlermeldungen für nicht gespeicherte Beiträge
                             if (response.data.includes('Bitte speichern Sie den Beitrag zuerst') || 
-                                (response.data.includes('Konnte nicht synchronisiert werden') && 
-                                 (response.data.includes('reisethemen_meta') || response.data.includes('kontinent')))) {
+                                response.data.includes('Konnte nicht synchronisiert werden')) {
                                 
                                 isNotSavedError = true;
                                 errorMsg = 'Bitte speichern Sie den Beitrag zuerst als Entwurf oder veröffentlichen Sie ihn, bevor Sie synchronisieren.';
@@ -591,5 +662,956 @@
             subtree: true,
             attributes: false
         });
+        
+        /**
+         * Aktualisiert die UI-Elemente mit neuen Taxonomie-Terms
+         * @param {Object} updatedTaxonomies - Objekt mit Taxonomie-Schlüsseln und Term-Arrays
+         */
+        function updateUIWithNewTerms(updatedTaxonomies) {
+            if (!updatedTaxonomies || Object.keys(updatedTaxonomies).length === 0) {
+                console.log('Keine aktualisierten Taxonomien vorhanden');
+                return;
+            }
+            
+            console.log('Aktualisiere UI mit neuen Terms für Taxonomien:', Object.keys(updatedTaxonomies));
+            
+            try {
+                // Für jede aktualisierte Taxonomie die UI aktualisieren
+                for (const taxonomy in updatedTaxonomies) {
+                    const terms = updatedTaxonomies[taxonomy];
+                    console.log(`Aktualisiere UI für Taxonomie ${taxonomy} mit ${terms.length} Terms`);
+                    
+                    try {
+                        // 1. JetEngine Checkboxen und Selects aktualisieren
+                        updateJetEngineElements(taxonomy, terms);
+                    } catch (error) {
+                        console.error(`Fehler bei der JetEngine-Aktualisierung für ${taxonomy}:`, error);
+                    }
+                    
+                    try {
+                        // 2. WordPress Standard-Taxonomie-Checkboxen und Selects aktualisieren
+                        updateWordPressStandardElements(taxonomy, terms);
+                    } catch (error) {
+                        console.error(`Fehler bei der WordPress-Standard-Aktualisierung für ${taxonomy}:`, error);
+                    }
+                    
+                    try {
+                        // 3. Meta-Box-Selects aktualisieren
+                        updateMetaBoxElements(taxonomy, terms);
+                    } catch (error) {
+                        console.error(`Fehler bei der Meta-Box-Aktualisierung für ${taxonomy}:`, error);
+                    }
+                    
+                    try {
+                        // 4. Alle weiteren möglichen Elemente suchen und aktualisieren
+                        updateAllPossibleElements(taxonomy, terms);
+                    } catch (error) {
+                        console.error(`Fehler bei der Suche nach weiteren Elementen für ${taxonomy}:`, error);
+                    }
+                }
+                
+                // Abschließende Meldung
+                console.log('UI-Aktualisierung für alle Taxonomien abgeschlossen');
+                
+            } catch (error) {
+                console.error('Fehler bei der UI-Aktualisierung:', error);
+            }
+        }
+        
+        /**
+         * Sucht und aktualisiert alle weiteren UI-Elemente, die von anderen Funktionen nicht abgedeckt werden
+         * @param {string} taxonomy - Taxonomie-Slug
+         * @param {Array} terms - Array von Term-Objekten mit id, name und slug
+         */
+        function updateAllPossibleElements(taxonomy, terms) {
+            console.log(`Suche nach weiteren UI-Elementen für ${taxonomy}`);
+            
+            // Passende Mappings für diese Taxonomie finden
+            let metaFieldName = taxonomy;
+            if (irSyncData && irSyncData.mappings) {
+                for (const id in irSyncData.mappings) {
+                    if (irSyncData.mappings[id].taxonomy === taxonomy && irSyncData.mappings[id].active) {
+                        metaFieldName = irSyncData.mappings[id].meta_field;
+                        break;
+                    }
+                }
+            }
+            
+            // 1. Alle Selects suchen, die wir noch nicht bearbeitet haben
+            const possibleSelects = $(`select:not(.updated-with-terms-${taxonomy})`);
+            
+            // Die bereits aktualisierten Selects markieren
+            $(`.jet-engine-select[data-field-name="${metaFieldName}"], 
+               select[name^="${metaFieldName}"], 
+               select[name="${metaFieldName}"],
+               select[name="tax_input[${taxonomy}][]"], 
+               select[name="tax_input[${taxonomy}]"], 
+               select[name^="${taxonomy}"],
+               .rwmb-taxonomy-wrapper select[data-taxonomy="${taxonomy}"], 
+               .rwmb-input select[data-taxonomy="${taxonomy}"]`).addClass(`updated-with-terms-${taxonomy}`);
+            
+            console.log(`Mögliche zusätzliche Selects gefunden: ${possibleSelects.length}`);
+            
+            // Jedes mögliche Select-Element prüfen
+            possibleSelects.each(function() {
+                const select = $(this);
+                
+                // Nach Attributen oder Kontexten suchen, die auf Taxonomie hinweisen
+                if (select.attr('id')?.includes(taxonomy) || 
+                    select.attr('name')?.includes(taxonomy) || 
+                    select.attr('class')?.includes(taxonomy) ||
+                    select.attr('id')?.includes(metaFieldName) || 
+                    select.attr('name')?.includes(metaFieldName) || 
+                    select.attr('class')?.includes(metaFieldName) ||
+                    select.closest(`[data-taxonomy="${taxonomy}"]`).length ||
+                    select.closest(`[data-field="${taxonomy}"]`).length ||
+                    select.closest(`[data-field="${metaFieldName}"]`).length) {
+                    
+                    // Diese könnten relevant sein
+                    const existingOptions = select.find('option').map(function() {
+                        return $(this).val();
+                    }).get();
+                    const currentValue = select.val();
+                    
+                    // Nur fehlende Terms hinzufügen
+                    let termAdded = false;
+                    terms.forEach(term => {
+                        if (!existingOptions.includes(term.id.toString()) && !existingOptions.includes(term.slug)) {
+                            select.append(`<option value="${term.id}">${term.name}</option>`);
+                            termAdded = true;
+                        }
+                    });
+                    
+                    // Aktuellen Wert wiederherstellen
+                    if (currentValue) {
+                        select.val(currentValue);
+                    }
+                    
+                    if (termAdded) {
+                        console.log(`Terms zu zusätzlichem Select hinzugefügt:`, select);
+                        select.addClass(`updated-with-terms-${taxonomy}`);
+                    }
+                }
+            });
+            
+            // 2. Nach Checkbox-Containern suchen, die auf Taxonomie hinweisen
+            const possibleCheckboxContainers = $(`ul:not(.updated-with-terms-${taxonomy}), 
+                                                 div.checklist:not(.updated-with-terms-${taxonomy}), 
+                                                 div.checkbox-list:not(.updated-with-terms-${taxonomy}),
+                                                 div.checkbox-group:not(.updated-with-terms-${taxonomy})`);
+            
+            console.log(`Mögliche zusätzliche Checkbox-Container gefunden: ${possibleCheckboxContainers.length}`);
+            
+            possibleCheckboxContainers.each(function() {
+                const container = $(this);
+                
+                // Nach Attributen oder Kontexten suchen, die auf Taxonomie hinweisen
+                if (container.attr('id')?.includes(taxonomy) || 
+                    container.attr('class')?.includes(taxonomy) ||
+                    container.attr('id')?.includes(metaFieldName) || 
+                    container.attr('class')?.includes(metaFieldName) ||
+                    container.closest(`[data-taxonomy="${taxonomy}"]`).length ||
+                    container.closest(`[data-field="${taxonomy}"]`).length ||
+                    container.closest(`[data-field="${metaFieldName}"]`).length) {
+                    
+                    // Prüfen, ob es Checkboxen enthält
+                    const checkboxes = container.find('input[type="checkbox"]');
+                    
+                    if (checkboxes.length > 0) {
+                        const existingOptions = checkboxes.map(function() {
+                            return $(this).val();
+                        }).get();
+                        
+                        // Nur fehlende Terms hinzufügen
+                        let termAdded = false;
+                        terms.forEach(term => {
+                            if (!existingOptions.includes(term.id.toString()) && !existingOptions.includes(term.slug)) {
+                                if (container.is('ul')) {
+                                    container.append(`
+                                        <li>
+                                            <label>
+                                                <input type="checkbox" name="${metaFieldName}[]" value="${term.id}">
+                                                ${term.name}
+                                            </label>
+                                        </li>
+                                    `);
+                                } else {
+                                    container.append(`
+                                        <div class="checkbox-item">
+                                            <label>
+                                                <input type="checkbox" name="${metaFieldName}[]" value="${term.id}">
+                                                ${term.name}
+                                            </label>
+                                        </div>
+                                    `);
+                                }
+                                termAdded = true;
+                            }
+                        });
+                        
+                        if (termAdded) {
+                            console.log(`Terms zu zusätzlichem Checkbox-Container hinzugefügt:`, container);
+                            container.addClass(`updated-with-terms-${taxonomy}`);
+                        }
+                    }
+                }
+            });
+            
+            console.log(`Suche nach weiteren UI-Elementen für ${taxonomy} abgeschlossen`);
+        }
+        
+        /**
+         * Aktualisiert JetEngine UI-Elemente für eine bestimmte Taxonomie
+         * @param {string} taxonomy - Taxonomie-Slug
+         * @param {Array} terms - Array von Term-Objekten mit id, name und slug
+         */
+        function updateJetEngineElements(taxonomy, terms) {
+            console.log(`Detaillierte JetEngine-Aktualisierung für ${taxonomy} beginnt`);
+            
+            // Passende Mappings für diese Taxonomie finden
+            let metaFieldName = taxonomy;
+            let mapping = null;
+            
+            if (irSyncData && irSyncData.mappings) {
+                for (const id in irSyncData.mappings) {
+                    if (irSyncData.mappings[id].taxonomy === taxonomy && irSyncData.mappings[id].active) {
+                        mapping = irSyncData.mappings[id];
+                        metaFieldName = mapping.meta_field;
+                        console.log(`Mapping gefunden: Taxonomie ${taxonomy} → Meta-Feld ${metaFieldName}`);
+                        break;
+                    }
+                }
+            }
+            
+            // JetEngine Checkbox-Listen finden und aktualisieren (mit dem korrekten Meta-Feldnamen)
+            const jetCheckboxLists = $(`.jet-engine-checkbox-list[data-field-name="${metaFieldName}"]`);
+            console.log(`JetEngine Checkbox-Listen für ${metaFieldName} gefunden: ${jetCheckboxLists.length}`);
+            
+            jetCheckboxLists.each(function() {
+                const checkboxContainer = $(this);
+                const existingOptions = checkboxContainer.find('.jet-engine-checkbox-list__input').map(function() {
+                    return $(this).val();
+                }).get();
+                
+                console.log(`Vorhandene Optionen in Checkbox-Liste:`, existingOptions);
+                
+                // Nur fehlende Terms hinzufügen
+                terms.forEach(term => {
+                    if (!existingOptions.includes(term.id.toString()) && !existingOptions.includes(term.slug)) {
+                        const itemTemplate = `
+                            <div class="jet-engine-checkbox-list__row">
+                                <label class="jet-engine-checkbox-list__item">
+                                    <input type="checkbox" class="jet-engine-checkbox-list__input" name="${metaFieldName}[]" value="${term.id}">
+                                    <span class="jet-engine-checkbox-list__label">${term.name}</span>
+                                </label>
+                            </div>
+                        `;
+                        checkboxContainer.append(itemTemplate);
+                        console.log(`Term ${term.name} (ID: ${term.id}) zur Checkbox-Liste hinzugefügt`);
+                    }
+                });
+            });
+            
+            // JetEngine formatierte Checkbox-Listen finden und aktualisieren
+            const jetFormattedCheckboxes = $(`.jet-engine-checkbox-list[data-field-name="${metaFieldName}_meta"]`);
+            console.log(`JetEngine formatierte Checkbox-Listen für ${metaFieldName}_meta gefunden: ${jetFormattedCheckboxes.length}`);
+            
+            jetFormattedCheckboxes.each(function() {
+                const checkboxContainer = $(this);
+                const existingOptions = checkboxContainer.find('.jet-engine-checkbox-list__input').map(function() {
+                    return $(this).attr('data-value');
+                }).get();
+                
+                console.log(`Vorhandene Optionen in formatierter Checkbox-Liste:`, existingOptions);
+                
+                // Nur fehlende Terms hinzufügen
+                terms.forEach(term => {
+                    if (!existingOptions.includes(term.id.toString()) && !existingOptions.includes(term.slug)) {
+                        const itemTemplate = `
+                            <div class="jet-engine-checkbox-list__row">
+                                <label class="jet-engine-checkbox-list__item">
+                                    <input type="checkbox" class="jet-engine-checkbox-list__input" name="${metaFieldName}_meta[${term.id}]" value="true" data-value="${term.id}">
+                                    <span class="jet-engine-checkbox-list__label">${term.name}</span>
+                                </label>
+                            </div>
+                        `;
+                        checkboxContainer.append(itemTemplate);
+                        console.log(`Term ${term.name} (ID: ${term.id}) zur formatierten Checkbox-Liste hinzugefügt`);
+                    }
+                });
+            });
+            
+            // JetEngine Select-Felder finden und aktualisieren (mit dem korrekten Meta-Feldnamen)
+            const jetSelects = $(`.jet-engine-select[data-field-name="${metaFieldName}"], select[name^="${metaFieldName}"], select[name="${metaFieldName}"]`);
+            console.log(`JetEngine Select-Felder für ${metaFieldName} gefunden: ${jetSelects.length}`);
+            
+            jetSelects.each(function() {
+                const select = $(this);
+                const existingOptions = select.find('option').map(function() {
+                    return $(this).val();
+                }).get();
+                const currentValue = select.val(); // Aktuell ausgewählter Wert beibehalten
+                
+                console.log(`Vorhandene Optionen in Select-Feld:`, existingOptions);
+                console.log(`Aktueller Wert im Select-Feld:`, currentValue);
+                
+                // Nur fehlende Terms hinzufügen
+                terms.forEach(term => {
+                    if (!existingOptions.includes(term.id.toString()) && !existingOptions.includes(term.slug)) {
+                        select.append(`<option value="${term.id}">${term.name}</option>`);
+                        console.log(`Term ${term.name} (ID: ${term.id}) zum Select-Feld hinzugefügt`);
+                    }
+                });
+                
+                // Aktuellen Wert wiederherstellen
+                if (currentValue) {
+                    select.val(currentValue);
+                }
+            });
+            
+            console.log(`Detaillierte JetEngine-Aktualisierung für ${taxonomy} abgeschlossen`);
+        }
+        
+        /**
+         * Aktualisiert WordPress Standard-UI-Elemente für eine bestimmte Taxonomie
+         * @param {string} taxonomy - Taxonomie-Slug
+         * @param {Array} terms - Array von Term-Objekten mit id, name und slug
+         */
+        function updateWordPressStandardElements(taxonomy, terms) {
+            console.log(`Detaillierte WordPress-Standard-Aktualisierung für ${taxonomy} beginnt`);
+            
+            // Passende Mappings für diese Taxonomie finden
+            let metaFieldName = taxonomy;
+            if (irSyncData && irSyncData.mappings) {
+                for (const id in irSyncData.mappings) {
+                    if (irSyncData.mappings[id].taxonomy === taxonomy && irSyncData.mappings[id].active) {
+                        metaFieldName = irSyncData.mappings[id].meta_field;
+                        console.log(`Mapping gefunden für WordPress-Elemente: Taxonomie ${taxonomy} → Meta-Feld ${metaFieldName}`);
+                        break;
+                    }
+                }
+            }
+            
+            // 1. WordPress Standard-Taxonomie-Checkboxen in der Sidebar
+            const taxonomyCheckboxes = $(`.${taxonomy}-checklist, #${taxonomy}checklist`);
+            console.log(`WordPress Taxonomie-Checkboxen gefunden: ${taxonomyCheckboxes.length}`);
+            
+            taxonomyCheckboxes.each(function() {
+                const checkboxContainer = $(this);
+                const existingOptions = checkboxContainer.find('input').map(function() {
+                    return $(this).val();
+                }).get();
+                
+                console.log(`Vorhandene Optionen in WP-Checkbox-Liste:`, existingOptions);
+                
+                // Nur fehlende Terms hinzufügen
+                terms.forEach(term => {
+                    if (!existingOptions.includes(term.id.toString())) {
+                        const itemTemplate = `
+                            <li id="${taxonomy}-${term.id}">
+                                <label class="selectit">
+                                    <input type="checkbox" name="tax_input[${taxonomy}][]" id="in-${taxonomy}-${term.id}" value="${term.id}">
+                                    ${term.name}
+                                </label>
+                            </li>
+                        `;
+                        checkboxContainer.append(itemTemplate);
+                        console.log(`Term ${term.name} (ID: ${term.id}) zur WP-Checkbox-Liste hinzugefügt`);
+                    }
+                });
+            });
+            
+            // 2. WordPress Standard-Taxonomie-Selects
+            const taxonomySelects = $(`select[name="tax_input[${taxonomy}][]"], select[name="tax_input[${taxonomy}]"], select[name^="${taxonomy}"]`);
+            console.log(`WordPress Taxonomie-Selects gefunden: ${taxonomySelects.length}`);
+            
+            taxonomySelects.each(function() {
+                const select = $(this);
+                const existingOptions = select.find('option').map(function() {
+                    return $(this).val();
+                }).get();
+                const currentValue = select.val(); // Aktuell ausgewählter Wert beibehalten
+                
+                console.log(`Vorhandene Optionen in WP-Select:`, existingOptions);
+                console.log(`Aktueller Wert in WP-Select:`, currentValue);
+                
+                // Nur fehlende Terms hinzufügen
+                terms.forEach(term => {
+                    if (!existingOptions.includes(term.id.toString())) {
+                        select.append(`<option value="${term.id}">${term.name}</option>`);
+                        console.log(`Term ${term.name} (ID: ${term.id}) zum WP-Select hinzugefügt`);
+                    }
+                });
+                
+                // Aktuellen Wert wiederherstellen
+                if (currentValue) {
+                    select.val(currentValue);
+                }
+            });
+            
+            // 3. Quick-Edit und Bulk-Edit Taxonomie-Checkboxen
+            const quickEditCheckboxes = $(`.inline-edit-col .${taxonomy}-checklist`);
+            console.log(`Quick-Edit Taxonomie-Checkboxen gefunden: ${quickEditCheckboxes.length}`);
+            
+            quickEditCheckboxes.each(function() {
+                const checkboxContainer = $(this);
+                const existingOptions = checkboxContainer.find('input').map(function() {
+                    return $(this).val();
+                }).get();
+                
+                // Nur fehlende Terms hinzufügen
+                terms.forEach(term => {
+                    if (!existingOptions.includes(term.id.toString())) {
+                        const itemTemplate = `
+                            <li id="${taxonomy}-${term.id}">
+                                <label class="selectit">
+                                    <input type="checkbox" name="tax_input[${taxonomy}][]" id="in-${taxonomy}-${term.id}" value="${term.id}">
+                                    ${term.name}
+                                </label>
+                            </li>
+                        `;
+                        checkboxContainer.append(itemTemplate);
+                        console.log(`Term ${term.name} (ID: ${term.id}) zu Quick-Edit-Checkboxen hinzugefügt`);
+                    }
+                });
+            });
+            
+            // 4. Nach allen möglichen Elementen mit der Taxonomie im Namen oder in Attributen suchen
+            const allPossibleElements = $(`[data-taxonomy="${taxonomy}"], [name*="${taxonomy}"], [id*="${taxonomy}"]`).not('script,style');
+            console.log(`Alle möglichen Taxonomie-Elemente gefunden: ${allPossibleElements.length}`);
+            
+            // Durchlaufen und prüfen, ob es sich um ein Select- oder Checkbox-Element handelt
+            allPossibleElements.each(function() {
+                const element = $(this);
+                
+                // Wenn es ein Select-Element ist
+                if (element.is('select') && !taxonomySelects.is(element)) {
+                    const existingOptions = element.find('option').map(function() {
+                        return $(this).val();
+                    }).get();
+                    const currentValue = element.val();
+                    
+                    // Nur fehlende Terms hinzufügen
+                    terms.forEach(term => {
+                        if (!existingOptions.includes(term.id.toString()) && !existingOptions.includes(term.slug)) {
+                            element.append(`<option value="${term.id}">${term.name}</option>`);
+                            console.log(`Term ${term.name} zu zusätzlichem Select hinzugefügt:`, element);
+                        }
+                    });
+                    
+                    // Aktuellen Wert wiederherstellen
+                    if (currentValue) {
+                        element.val(currentValue);
+                    }
+                }
+                
+                // Wenn es ein potentieller Checkbox-Container ist
+                if (element.is('ul, div, fieldset')) {
+                    const checkboxes = element.find('input[type="checkbox"]');
+                    if (checkboxes.length > 0) {
+                        const existingOptions = checkboxes.map(function() {
+                            return $(this).val();
+                        }).get();
+                        
+                        let termAdded = false;
+                        
+                        terms.forEach(term => {
+                            if (!existingOptions.includes(term.id.toString()) && !existingOptions.includes(term.slug)) {
+                                // Wir versuchen, den passenden Container-Typ zu erkennen
+                                if (element.is('ul')) {
+                                    element.append(`
+                                        <li>
+                                            <label>
+                                                <input type="checkbox" name="${taxonomy}[]" value="${term.id}">
+                                                ${term.name}
+                                            </label>
+                                        </li>
+                                    `);
+                                    termAdded = true;
+                                } else if (element.find('.checkbox-item, .checkbox-wrapper, .checkbox-container').length) {
+                                    const checkboxItemClass = element.find('.checkbox-item').length ? 'checkbox-item' : 
+                                                            element.find('.checkbox-wrapper').length ? 'checkbox-wrapper' : 'checkbox-container';
+                                    
+                                    element.append(`
+                                        <div class="${checkboxItemClass}">
+                                            <label>
+                                                <input type="checkbox" name="${taxonomy}[]" value="${term.id}">
+                                                ${term.name}
+                                            </label>
+                                        </div>
+                                    `);
+                                    termAdded = true;
+                                }
+                            }
+                        });
+                        
+                        if (termAdded) {
+                            console.log(`Terms zu zusätzlichem Checkbox-Container hinzugefügt:`, element);
+                        }
+                    }
+                }
+            });
+            
+            console.log(`Detaillierte WordPress-Standard-Aktualisierung für ${taxonomy} abgeschlossen`);
+        }
+        
+        /**
+         * Aktualisiert Meta-Box-UI-Elemente für eine bestimmte Taxonomie
+         * @param {string} taxonomy - Taxonomie-Slug
+         * @param {Array} terms - Array von Term-Objekten mit id, name und slug
+         */
+        function updateMetaBoxElements(taxonomy, terms) {
+            console.log(`Detaillierte Meta-Box-Aktualisierung für ${taxonomy} beginnt`);
+            
+            // Passende Mappings für diese Taxonomie finden
+            let metaFieldName = taxonomy;
+            if (irSyncData && irSyncData.mappings) {
+                for (const id in irSyncData.mappings) {
+                    if (irSyncData.mappings[id].taxonomy === taxonomy && irSyncData.mappings[id].active) {
+                        metaFieldName = irSyncData.mappings[id].meta_field;
+                        console.log(`Mapping gefunden für Meta-Box-Elemente: Taxonomie ${taxonomy} → Meta-Feld ${metaFieldName}`);
+                        break;
+                    }
+                }
+            }
+            
+            // 1. Meta-Box-Selects für Taxonomien mit direkter data-taxonomy-Verknüpfung
+            const directTaxonomySelects = $(`.rwmb-taxonomy-wrapper select[data-taxonomy="${taxonomy}"], .rwmb-input select[data-taxonomy="${taxonomy}"]`);
+            console.log(`Meta-Box direkter Taxonomie-Selects gefunden: ${directTaxonomySelects.length}`);
+            
+            directTaxonomySelects.each(function() {
+                const select = $(this);
+                const existingOptions = select.find('option').map(function() {
+                    return $(this).val();
+                }).get();
+                const currentValue = select.val(); // Aktuell ausgewählter Wert beibehalten
+                
+                console.log(`Vorhandene Optionen in Meta-Box direktem Taxonomie-Select:`, existingOptions);
+                
+                // Nur fehlende Terms hinzufügen
+                terms.forEach(term => {
+                    if (!existingOptions.includes(term.id.toString()) && !existingOptions.includes(term.slug)) {
+                        select.append(`<option value="${term.id}">${term.name}</option>`);
+                        console.log(`Term ${term.name} (ID: ${term.id}) zum direkten Meta-Box-Select hinzugefügt`);
+                    }
+                });
+                
+                // Aktuellen Wert wiederherstellen
+                if (currentValue) {
+                    select.val(currentValue);
+                }
+            });
+            
+            // 2. Meta-Box-Selects über das Mapping-Feld
+            const metaFieldSelects = $(`.rwmb-taxonomy-wrapper select[name^="${metaFieldName}"], .rwmb-input select[name^="${metaFieldName}"]`);
+            console.log(`Meta-Box Meta-Field-Selects gefunden: ${metaFieldSelects.length}`);
+            
+            metaFieldSelects.each(function() {
+                const select = $(this);
+                if (!directTaxonomySelects.is(select)) { // Nur wenn nicht bereits als direktes Taxonomie-Select behandelt
+                    const existingOptions = select.find('option').map(function() {
+                        return $(this).val();
+                    }).get();
+                    const currentValue = select.val();
+                    
+                    console.log(`Vorhandene Optionen in Meta-Box Meta-Field-Select:`, existingOptions);
+                    
+                    // Nur fehlende Terms hinzufügen
+                    terms.forEach(term => {
+                        if (!existingOptions.includes(term.id.toString()) && !existingOptions.includes(term.slug)) {
+                            select.append(`<option value="${term.id}">${term.name}</option>`);
+                            console.log(`Term ${term.name} (ID: ${term.id}) zum Meta-Box-Field-Select hinzugefügt`);
+                        }
+                    });
+                    
+                    // Aktuellen Wert wiederherstellen
+                    if (currentValue) {
+                        select.val(currentValue);
+                    }
+                }
+            });
+            
+            // 3. Meta-Box-Checkboxen für Taxonomien mit direkter data-taxonomy-Verknüpfung
+            const metaBoxCheckboxes = $(`.rwmb-taxonomy-wrapper .rwmb-checkbox-list[data-taxonomy="${taxonomy}"], .rwmb-input .rwmb-checkbox-list[data-taxonomy="${taxonomy}"]`);
+            console.log(`Meta-Box Taxonomie-Checkboxen gefunden: ${metaBoxCheckboxes.length}`);
+            
+            metaBoxCheckboxes.each(function() {
+                const checkboxContainer = $(this);
+                const existingOptions = checkboxContainer.find('input').map(function() {
+                    return $(this).val();
+                }).get();
+                
+                console.log(`Vorhandene Optionen in Meta-Box-Checkboxen:`, existingOptions);
+                
+                // Nur fehlende Terms hinzufügen
+                terms.forEach(term => {
+                    if (!existingOptions.includes(term.id.toString()) && !existingOptions.includes(term.slug)) {
+                        const itemTemplate = `
+                            <li>
+                                <label>
+                                    <input type="checkbox" name="${taxonomy}[]" value="${term.id}" class="rwmb-checkbox">
+                                    ${term.name}
+                                </label>
+                            </li>
+                        `;
+                        checkboxContainer.append(itemTemplate);
+                        console.log(`Term ${term.name} (ID: ${term.id}) zu Meta-Box-Checkboxen hinzugefügt`);
+                    }
+                });
+            });
+            
+            // 4. Meta-Box-Checkboxen über das Mapping-Feld
+            const metaFieldCheckboxes = $(`.rwmb-taxonomy-wrapper .rwmb-checkbox-list[name^="${metaFieldName}"], 
+                                          .rwmb-input .rwmb-checkbox-list[name^="${metaFieldName}"],
+                                          .rwmb-field[data-name="${metaFieldName}"] .rwmb-checkbox-list,
+                                          .rwmb-field[data-name="${metaFieldName}"] ul`);
+            
+            console.log(`Meta-Box Meta-Field-Checkboxen gefunden: ${metaFieldCheckboxes.length}`);
+            
+            metaFieldCheckboxes.each(function() {
+                const checkboxContainer = $(this);
+                if (!metaBoxCheckboxes.is(checkboxContainer)) { // Nur wenn nicht bereits als direkte Taxonomie-Checkboxen behandelt
+                    const existingOptions = checkboxContainer.find('input').map(function() {
+                        return $(this).val();
+                    }).get();
+                    
+                    console.log(`Vorhandene Optionen in Meta-Box Meta-Field-Checkboxen:`, existingOptions);
+                    
+                    // Nur fehlende Terms hinzufügen
+                    terms.forEach(term => {
+                        if (!existingOptions.includes(term.id.toString()) && !existingOptions.includes(term.slug)) {
+                            // Angepasst an das Format von Meta-Box
+                            let itemTemplate = '';
+                            
+                            if (checkboxContainer.is('ul')) {
+                                itemTemplate = `
+                                    <li>
+                                        <label>
+                                            <input type="checkbox" name="${metaFieldName}[]" value="${term.id}" class="rwmb-checkbox">
+                                            ${term.name}
+                                        </label>
+                                    </li>
+                                `;
+                            } else {
+                                itemTemplate = `
+                                    <div class="rwmb-checkbox-wrapper">
+                                        <label>
+                                            <input type="checkbox" name="${metaFieldName}[]" value="${term.id}" class="rwmb-checkbox">
+                                            ${term.name}
+                                        </label>
+                                    </div>
+                                `;
+                            }
+                            
+                            checkboxContainer.append(itemTemplate);
+                            console.log(`Term ${term.name} (ID: ${term.id}) zu Meta-Box Meta-Field-Checkboxen hinzugefügt`);
+                        }
+                    });
+                }
+            });
+            
+            // 5. Nach weiteren Meta-Box-Elementen für diese Taxonomie suchen
+            const additionalMetaBoxElements = $(`.rwmb-field[data-name="${metaFieldName}"] select, 
+                                               .rwmb-field[data-name="${metaFieldName}_meta"] select,
+                                               .rwmb-field[data-name="${taxonomy}"] select`);
+            
+            console.log(`Zusätzliche Meta-Box-Selects gefunden: ${additionalMetaBoxElements.length}`);
+            
+            additionalMetaBoxElements.each(function() {
+                const select = $(this);
+                if (!directTaxonomySelects.is(select) && !metaFieldSelects.is(select)) { 
+                    const existingOptions = select.find('option').map(function() {
+                        return $(this).val();
+                    }).get();
+                    const currentValue = select.val();
+                    
+                    // Nur fehlende Terms hinzufügen
+                    terms.forEach(term => {
+                        if (!existingOptions.includes(term.id.toString()) && !existingOptions.includes(term.slug)) {
+                            select.append(`<option value="${term.id}">${term.name}</option>`);
+                            console.log(`Term ${term.name} (ID: ${term.id}) zu zusätzlichem Meta-Box-Select hinzugefügt`);
+                        }
+                    });
+                    
+                    // Aktuellen Wert wiederherstellen
+                    if (currentValue) {
+                        select.val(currentValue);
+                    }
+                }
+            });
+            
+            console.log(`Detaillierte Meta-Box-Aktualisierung für ${taxonomy} abgeschlossen`);
+        }
+        
+        /**
+         * Verarbeitet die Meta-Feld-Aktualisierungen nach der Synchronisation
+         * @param {Object} updatedTaxonomies - Objekt mit Taxonomie-Schlüsseln und Term-Arrays
+         */
+        function processMetaFieldsUpdate(updatedTaxonomies) {
+            console.log('Starte Aktualisierung der Meta-Felder für alle Taxonomien...');
+            
+            // Für jede aktualisierte Taxonomie die zugehörigen Meta-Felder aktualisieren
+            for (const taxonomy in updatedTaxonomies) {
+                const terms = updatedTaxonomies[taxonomy];
+                console.log(`Verarbeite Taxonomie ${taxonomy} mit ${terms.length} Terms`);
+                
+                // Das entsprechende Meta-Feld für diese Taxonomie finden
+                let metaField = taxonomy; // Standard: gleicher Name
+                
+                // In den Mappings nach der Zuordnung suchen
+                if (irSyncData && irSyncData.mappings) {
+                    for (const id in irSyncData.mappings) {
+                        if (irSyncData.mappings[id].taxonomy === taxonomy && irSyncData.mappings[id].active) {
+                            metaField = irSyncData.mappings[id].meta_field;
+                            console.log(`Mapping gefunden: Taxonomie ${taxonomy} → Meta-Feld ${metaField}`);
+                            break;
+                        }
+                    }
+                }
+                
+                // Jetzt gezielt Felder aktualisieren, die mit diesem Meta-Feld zu tun haben
+                updateMetaFieldSelectors(metaField, taxonomy, terms);
+            }
+            
+            console.log('Meta-Feld-Aktualisierung für alle Taxonomien abgeschlossen');
+        }
+        
+        /**
+         * Aktualisiert UI-Elemente basierend auf Meta-Feld- und Taxonomie-Namen
+         * @param {string} metaField - Name des Meta-Feldes
+         * @param {string} taxonomy - Name der Taxonomie
+         * @param {Array} terms - Array von Term-Objekten
+         */
+        function updateMetaFieldSelectors(metaField, taxonomy, terms) {
+            console.log(`Aktualisiere UI-Elemente für Meta-Feld: ${metaField}, Taxonomie: ${taxonomy}`);
+            
+            // 1. Direkte Feldselektion - mehrere mögliche Varianten
+            const directSelectors = [
+                `select[name="${metaField}"]`,                  // Standard-Select
+                `select[name="${metaField}[]"]`,                // Multi-Select
+                `#${metaField}`,                                // ID-basiert
+                `.${metaField}-select`,                         // Klassen-basiert
+                `select.${metaField}`,                          // Klassen-basiert (nur Selects)
+                `.jet-engine-select[data-field-name="${metaField}"]` // JetEngine-spezifisch
+            ];
+            
+            // Alle direkten Selektoren durchgehen
+            $(directSelectors.join(', ')).each(function() {
+                const select = $(this);
+                console.log(`Direktes Feld für ${metaField} gefunden:`, select);
+                
+                // Aktuelle Auswahl speichern
+                const currentValue = select.val();
+                console.log('Aktueller Wert:', currentValue);
+                
+                // Existierende Optionen erfassen
+                const existingOptions = select.find('option').map(function() {
+                    return $(this).val();
+                }).get();
+                console.log('Existierende Optionen:', existingOptions);
+                
+                // Neue Optionen hinzufügen
+                let optionsAdded = false;
+                terms.forEach(term => {
+                    if (!existingOptions.includes(term.id.toString()) && 
+                        !existingOptions.includes(term.slug) && 
+                        !existingOptions.includes(term.name)) {
+                        
+                        select.append(`<option value="${term.id}">${term.name}</option>`);
+                        console.log(`Option für ${metaField} hinzugefügt: ${term.name} (${term.id})`);
+                        optionsAdded = true;
+                    }
+                });
+                
+                // Wenn Optionen hinzugefügt wurden, die aktuelle Auswahl wiederherstellen
+                if (optionsAdded && currentValue) {
+                    select.val(currentValue);
+                    console.log('Auswahl wiederhergestellt:', currentValue);
+                }
+            });
+            
+            // 2. JetEngine formatierte Checkbox-Listen
+            $(`.jet-engine-checkbox-list[data-field-name="${metaField}"], .jet-engine-checkbox-list[data-field-name="${metaField}_meta"]`).each(function() {
+                const checkboxContainer = $(this);
+                console.log(`JetEngine Checkbox-Liste für ${metaField} gefunden:`, checkboxContainer);
+                
+                // Format bestimmen
+                const isMetaFormat = $(this).attr('data-field-name').endsWith('_meta');
+                
+                // Existierende Optionen erfassen
+                const existingOptions = checkboxContainer.find('.jet-engine-checkbox-list__input').map(function() {
+                    return isMetaFormat ? $(this).attr('data-value') : $(this).val();
+                }).get();
+                console.log('Existierende Optionen:', existingOptions);
+                
+                // Neue Optionen hinzufügen
+                terms.forEach(term => {
+                    if (!existingOptions.includes(term.id.toString()) && !existingOptions.includes(term.slug)) {
+                        let itemTemplate;
+                        
+                        if (isMetaFormat) {
+                            // Für Meta-Format (name="field_meta[term_id]" value="true")
+                            itemTemplate = `
+                                <div class="jet-engine-checkbox-list__row">
+                                    <label class="jet-engine-checkbox-list__item">
+                                        <input type="checkbox" class="jet-engine-checkbox-list__input" name="${metaField}_meta[${term.id}]" value="true" data-value="${term.id}">
+                                        <span class="jet-engine-checkbox-list__label">${term.name}</span>
+                                    </label>
+                                </div>
+                            `;
+                        } else {
+                            // Für Standard-Format (name="field[]" value="term_id")
+                            itemTemplate = `
+                                <div class="jet-engine-checkbox-list__row">
+                                    <label class="jet-engine-checkbox-list__item">
+                                        <input type="checkbox" class="jet-engine-checkbox-list__input" name="${metaField}[]" value="${term.id}">
+                                        <span class="jet-engine-checkbox-list__label">${term.name}</span>
+                                    </label>
+                                </div>
+                            `;
+                        }
+                        
+                        checkboxContainer.append(itemTemplate);
+                        console.log(`Checkbox für ${metaField} hinzugefügt: ${term.name} (${term.id})`);
+                    }
+                });
+            });
+            
+            // 3. WordPress Standard-Taxonomie-Checkboxen
+            $(`.${taxonomy}-checklist, #${taxonomy}checklist`).each(function() {
+                const checkboxContainer = $(this);
+                console.log(`WordPress Taxonomie-Checkboxen für ${taxonomy} gefunden:`, checkboxContainer);
+                
+                // Existierende Optionen erfassen
+                const existingOptions = checkboxContainer.find('input').map(function() {
+                    return $(this).val();
+                }).get();
+                console.log('Existierende Optionen:', existingOptions);
+                
+                // Neue Optionen hinzufügen
+                terms.forEach(term => {
+                    if (!existingOptions.includes(term.id.toString())) {
+                        const itemTemplate = `
+                            <li id="${taxonomy}-${term.id}">
+                                <label class="selectit">
+                                    <input type="checkbox" name="tax_input[${taxonomy}][]" id="in-${taxonomy}-${term.id}" value="${term.id}">
+                                    ${term.name}
+                                </label>
+                            </li>
+                        `;
+                        checkboxContainer.append(itemTemplate);
+                        console.log(`WP Checkbox für ${taxonomy} hinzugefügt: ${term.name} (${term.id})`);
+                    }
+                });
+            });
+            
+            // 4. WordPress Standard-Taxonomie-Selects
+            $(`select[name="tax_input[${taxonomy}][]"], select[name="tax_input[${taxonomy}]"]`).each(function() {
+                const select = $(this);
+                console.log(`WordPress Taxonomie-Select für ${taxonomy} gefunden:`, select);
+                
+                // Existierende Optionen erfassen
+                const existingOptions = select.find('option').map(function() {
+                    return $(this).val();
+                }).get();
+                const currentValue = select.val();
+                
+                // Neue Optionen hinzufügen
+                let optionsAdded = false;
+                terms.forEach(term => {
+                    if (!existingOptions.includes(term.id.toString())) {
+                        select.append(`<option value="${term.id}">${term.name}</option>`);
+                        console.log(`WP Select-Option für ${taxonomy} hinzugefügt: ${term.name} (${term.id})`);
+                        optionsAdded = true;
+                    }
+                });
+                
+                // Wenn Optionen hinzugefügt wurden, die aktuelle Auswahl wiederherstellen
+                if (optionsAdded && currentValue) {
+                    select.val(currentValue);
+                }
+            });
+            
+            // 5. Meta-Box-Elemente
+            $(`.rwmb-taxonomy-wrapper select[data-taxonomy="${taxonomy}"], .rwmb-input select[data-taxonomy="${taxonomy}"]`).each(function() {
+                const select = $(this);
+                console.log(`Meta-Box-Select für ${taxonomy} gefunden:`, select);
+                
+                // Existierende Optionen erfassen
+                const existingOptions = select.find('option').map(function() {
+                    return $(this).val();
+                }).get();
+                const currentValue = select.val();
+                
+                // Neue Optionen hinzufügen
+                let optionsAdded = false;
+                terms.forEach(term => {
+                    if (!existingOptions.includes(term.id.toString()) && !existingOptions.includes(term.slug)) {
+                        select.append(`<option value="${term.id}">${term.name}</option>`);
+                        console.log(`Meta-Box-Option für ${taxonomy} hinzugefügt: ${term.name} (${term.id})`);
+                        optionsAdded = true;
+                    }
+                });
+                
+                // Wenn Optionen hinzugefügt wurden, die aktuelle Auswahl wiederherstellen
+                if (optionsAdded && currentValue) {
+                    select.val(currentValue);
+                }
+            });
+            
+            // 6. Dynamic-Finder für weitere UI-Elemente
+            const dynamicSelectors = [
+                `select[id*="${metaField}"]`,
+                `select[name*="${metaField}"]`, 
+                `select[id*="${taxonomy}"]`,
+                `select[name*="${taxonomy}"]`,
+                `select[class*="${metaField}"]`,
+                `select[class*="${taxonomy}"]`
+            ];
+            
+            // Alle zusätzlichen, potenziell passenden Selektoren durchgehen
+            // Aber nur, wenn sie nicht bereits durch die vorherigen Selektoren abgedeckt wurden
+            $(dynamicSelectors.join(', ')).not(`select[name="${metaField}"], select[name="${metaField}[]"], #${metaField}, .${metaField}-select, select.${metaField}, .jet-engine-select[data-field-name="${metaField}"]`).each(function() {
+                const select = $(this);
+                console.log(`Dynamisch gefundenes Feld für ${metaField}/${taxonomy}:`, select);
+                
+                // Existierende Optionen erfassen
+                const existingOptions = select.find('option').map(function() {
+                    return $(this).val();
+                }).get();
+                const currentValue = select.val();
+                
+                // Neue Optionen hinzufügen
+                let optionsAdded = false;
+                terms.forEach(term => {
+                    if (!existingOptions.includes(term.id.toString()) && !existingOptions.includes(term.slug)) {
+                        select.append(`<option value="${term.id}">${term.name}</option>`);
+                        console.log(`Option für dynamisches Feld hinzugefügt: ${term.name} (${term.id})`);
+                        optionsAdded = true;
+                    }
+                });
+                
+                // Wenn Optionen hinzugefügt wurden, die aktuelle Auswahl wiederherstellen
+                if (optionsAdded && currentValue) {
+                    select.val(currentValue);
+                }
+            });
+            
+            // 7. Globalen Event auslösen für custom Integrationen
+            const eventName = `sync_terms_updated_${taxonomy.replace(/-/g, '_')}`;
+            
+            // Event mit Termsdaten auslösen
+            const event = new CustomEvent(eventName, {
+                detail: { 
+                    terms: terms,
+                    taxonomy: taxonomy,
+                    metaField: metaField
+                }
+            });
+            document.dispatchEvent(event);
+            console.log(`Globales Event "${eventName}" für Custom-Integrationen ausgelöst`);
+            
+            console.log(`UI-Update für ${metaField}/${taxonomy} abgeschlossen`);
+        }
     });
 })(jQuery);

@@ -141,71 +141,278 @@ class Crocoblock_Sync_Core {
 
         // Prüfen, ob Metadaten existieren
         if (!metadata_exists('post', $post_id, $meta_field)) {
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log("Sync abgebrochen: Meta-Feld '$meta_field' existiert nicht für Post $post_id");
+            }
             return false;
         }
         
         // Prüfen, ob Taxonomie existiert
         if (!taxonomy_exists($taxonomy)) {
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log("Sync abgebrochen: Taxonomie '$taxonomy' existiert nicht");
+            }
             return false;
         }
 
         // Meta-Daten abrufen
         $selected_terms = get_post_meta($post_id, $meta_field, true);
         
-        // Leere Werte behandeln
-        if (empty($selected_terms) || $selected_terms === 'false' || $selected_terms === false || $selected_terms === null) {
-            wp_set_object_terms($post_id, array(), $taxonomy);
-            return array(
-                'status' => 'cleared',
-                'meta_field' => $meta_field,
-                'taxonomy' => $taxonomy,
-                'terms' => array()
-            );
+        // Debugging-Ausgabe
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log("Synchronisiere '$meta_field' mit Taxonomie '$taxonomy'. Wert: " . print_r($selected_terms, true));
         }
         
-        // Sicherstellen, dass es ein Array ist
+        // Leere Werte behandeln
+        if (empty($selected_terms) && $selected_terms !== '0' && $selected_terms !== 0) {
+            // Prüfen, ob wir Terms löschen oder beibehalten sollen
+            $delete_empty_terms = apply_filters('crocoblock_sync_delete_empty_terms', true, $post_id, $meta_field, $taxonomy);
+            
+            if ($delete_empty_terms) {
+                $result = wp_set_object_terms($post_id, array(), $taxonomy);
+                
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log("Leerer Wert: Alle Terms für Taxonomie '$taxonomy' gelöscht");
+                }
+                
+                return array(
+                    'status' => 'cleared',
+                    'meta_field' => $meta_field,
+                    'taxonomy' => $taxonomy,
+                    'terms' => array()
+                );
+            } else {
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log("Leerer Wert: Bestehende Terms für Taxonomie '$taxonomy' beibehalten (durch Filter)");
+                }
+                
+                return array(
+                    'status' => 'skipped',
+                    'meta_field' => $meta_field,
+                    'taxonomy' => $taxonomy,
+                    'terms' => array()
+                );
+            }
+        }
+        
+        // JetEngine- und andere dynamische Felder können verschiedene Formate liefern
+        // Wir versuchen, sie in ein einheitliches Format zu bringen
         if (!is_array($selected_terms)) {
-            $selected_terms = array($selected_terms);
+            // JetEngine-Felder können durch Komma getrennte Werte liefern
+            if (is_string($selected_terms) && strpos($selected_terms, ',') !== false) {
+                $selected_terms = array_map('trim', explode(',', $selected_terms));
+            } 
+            // JetEngine kann auch serialisierte Arrays liefern
+            else if (is_string($selected_terms) && is_serialized($selected_terms)) {
+                $unserialized = maybe_unserialize($selected_terms);
+                if (is_array($unserialized)) {
+                    $selected_terms = $unserialized;
+                } else {
+                    $selected_terms = array($selected_terms);
+                }
+            }
+            else {
+                $selected_terms = array($selected_terms);
+            }
         }
 
-        // Ungültige Werte filtern
+        // Bei JetEngine-Feldern mit mehreren Werten werden manchmal JSON-Strings geliefert
+        if (count($selected_terms) === 1 && is_string($selected_terms[0]) && 
+            (strpos($selected_terms[0], '[') === 0 || strpos($selected_terms[0], '{') === 0)) {
+            $json_decoded = json_decode($selected_terms[0], true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($json_decoded)) {
+                $selected_terms = $json_decoded;
+            }
+        }
+
+        // Ungültige Werte filtern und Whitespace entfernen
         $selected_terms = array_filter($selected_terms, function($term) {
-            return !empty($term) && $term !== 'false';
+            return ($term !== '' && $term !== false && $term !== null);
         });
+        
+        // Leere Ergebnisse nach Filterung behandeln
+        if (empty($selected_terms)) {
+            $delete_empty_terms = apply_filters('crocoblock_sync_delete_empty_terms', true, $post_id, $meta_field, $taxonomy);
+            
+            if ($delete_empty_terms) {
+                $result = wp_set_object_terms($post_id, array(), $taxonomy);
+                
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log("Nach Filterung leere Werte: Alle Terms für Taxonomie '$taxonomy' gelöscht");
+                }
+                
+                return array(
+                    'status' => 'cleared',
+                    'meta_field' => $meta_field,
+                    'taxonomy' => $taxonomy,
+                    'terms' => array()
+                );
+            } else {
+                return array(
+                    'status' => 'skipped',
+                    'meta_field' => $meta_field,
+                    'taxonomy' => $taxonomy,
+                    'terms' => array()
+                );
+            }
+        }
+        
+        // Alle Terms der Taxonomie abrufen für besseren Duplikat-Check
+        $all_taxonomy_terms = array();
+        $terms_by_name = array();
+        $terms_by_slug = array();
+        
+        $all_terms = get_terms(array(
+            'taxonomy' => $taxonomy,
+            'hide_empty' => false,
+            'fields' => 'all'
+        ));
+        
+        if (!is_wp_error($all_terms)) {
+            foreach ($all_terms as $term) {
+                $all_taxonomy_terms[$term->term_id] = $term;
+                $terms_by_name[strtolower(trim($term->name))] = $term;
+                $terms_by_slug[$term->slug] = $term;
+            }
+        }
 
         // Für die Erfassung neu erstellter Terms
         $created_terms = array();
         
-        // Alphabetisch sortieren und Terms verarbeiten
+        // Prüfen, ob wir bereits Terms für diesen Post haben
+        $existing_post_terms = wp_get_object_terms($post_id, $taxonomy, array('fields' => 'ids'));
+        if (is_wp_error($existing_post_terms)) {
+            $existing_post_terms = array();
+        }
+        
+        // Debug-Ausgabe
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log("Bestehende Terms für Post $post_id, Taxonomie $taxonomy: " . print_r($existing_post_terms, true));
+        }
+        
+        // Terms verarbeiten und sortieren
         $terms_sorted = array();
         foreach ($selected_terms as $term_id_or_slug) {
             $term = null;
             
-            // Wenn es eine Zahl ist, versuche es als ID zu interpretieren
+            // Sicherstellen, dass wir einen String oder eine Zahl haben
+            if (is_object($term_id_or_slug) || is_array($term_id_or_slug)) {
+                // Wenn es ein Objekt ist (z.B. aus JetEngine), versuchen Sie ID/Slug zu extrahieren
+                if (is_object($term_id_or_slug) && isset($term_id_or_slug->term_id)) {
+                    // Es sieht aus wie ein Term-Objekt
+                    $term = get_term($term_id_or_slug->term_id, $taxonomy);
+                    if (!is_wp_error($term) && $term) {
+                        $terms_sorted[$term->name] = $term->term_id;
+                        continue;
+                    }
+                } else if (is_array($term_id_or_slug) && isset($term_id_or_slug['value'])) {
+                    // JetEngine Array-Format mit 'value' Eigenschaft
+                    $term_id_or_slug = $term_id_or_slug['value'];
+                } else if (is_array($term_id_or_slug) && isset($term_id_or_slug['id'])) {
+                    // JetEngine Array-Format mit 'id' Eigenschaft
+                    $term_id_or_slug = $term_id_or_slug['id'];
+                } else {
+                    if (defined('WP_DEBUG') && WP_DEBUG) {
+                        error_log("Überspringe komplexen Term-Wert: " . print_r($term_id_or_slug, true));
+                    }
+                    continue;
+                }
+            }
+            
+            // Whitespace entfernen
+            if (is_string($term_id_or_slug)) {
+                $term_id_or_slug = trim($term_id_or_slug);
+            }
+            
+            // Multi-Level-Suche für Terms:
+            // 1. Wenn es eine Zahl ist, versuche es als ID zu interpretieren
             if (is_numeric($term_id_or_slug)) {
-                $term = get_term_by('id', intval($term_id_or_slug), $taxonomy);
-            } else {
-                // Versuche zuerst, den Term über den Slug zu finden
-                $term = get_term_by('slug', sanitize_text_field($term_id_or_slug), $taxonomy);
-                
-                // Wenn kein Term gefunden wurde, versuche es mit dem Namen
-                if (!$term) {
-                    $term = get_term_by('name', sanitize_text_field($term_id_or_slug), $taxonomy);
+                $term_id = intval($term_id_or_slug);
+                if (isset($all_taxonomy_terms[$term_id])) {
+                    $term = $all_taxonomy_terms[$term_id];
+                } else {
+                    $term = get_term_by('id', $term_id, $taxonomy);
+                }
+            } else if (!empty($term_id_or_slug)) {
+                // 2. Versuche zuerst, den Term über den Slug zu finden
+                $clean_slug = sanitize_title($term_id_or_slug);
+                if (isset($terms_by_slug[$clean_slug])) {
+                    $term = $terms_by_slug[$clean_slug];
+                } else {
+                    $term = get_term_by('slug', sanitize_text_field($term_id_or_slug), $taxonomy);
                 }
                 
-                // Wenn immer noch kein Term gefunden wurde, erstelle einen neuen Term
-                if (!$term && !is_numeric($term_id_or_slug)) {
-                    $term_name = sanitize_text_field($term_id_or_slug);
-                    $new_term = wp_insert_term($term_name, $taxonomy);
+                // 3. Wenn kein Term gefunden wurde, versuche es mit dem Namen (case-insensitive)
+                if (!$term) {
+                    $clean_name = strtolower(trim($term_id_or_slug));
+                    if (isset($terms_by_name[$clean_name])) {
+                        $term = $terms_by_name[$clean_name];
+                    } else {
+                        $term = get_term_by('name', sanitize_text_field($term_id_or_slug), $taxonomy);
+                    }
+                }
+                
+                // 4. Wenn immer noch kein Term gefunden wurde, erstelle einen neuen Term
+                if (!$term && !empty($term_id_or_slug)) {
+                    // Prüfen, ob Term-Erstellung erlaubt ist
+                    $allow_term_creation = apply_filters('crocoblock_sync_allow_term_creation', true, $term_id_or_slug, $taxonomy, $post_id);
                     
-                    if (!is_wp_error($new_term)) {
-                        $term = get_term_by('id', $new_term['term_id'], $taxonomy);
-                        // Erfassen des neu erstellten Terms
-                        $created_terms[] = $term_name;
+                    if ($allow_term_creation) {
+                        $term_name = sanitize_text_field($term_id_or_slug);
+                        
+                        // Prüfen, ob bereits ein Term mit ähnlichem Namen existiert (case-insensitive)
+                        $clean_name = strtolower($term_name);
+                        if (isset($terms_by_name[$clean_name])) {
+                            $term = $terms_by_name[$clean_name];
+                        } else {
+                            // Neuen Term anlegen
+                            $new_term = wp_insert_term($term_name, $taxonomy);
+                            
+                            if (!is_wp_error($new_term)) {
+                                $term = get_term_by('id', $new_term['term_id'], $taxonomy);
+                                
+                                // Term-Listen aktualisieren
+                                $all_taxonomy_terms[$term->term_id] = $term;
+                                $terms_by_name[strtolower($term->name)] = $term;
+                                $terms_by_slug[$term->slug] = $term;
+                                
+                                // Erfassen des neu erstellten Terms
+                                $created_terms[] = $term_name;
+                                
+                                if (defined('WP_DEBUG') && WP_DEBUG) {
+                                    error_log("Neuer Term erstellt: '$term_name' (ID: {$term->term_id})");
+                                }
+                            } else {
+                                // Prüfen, ob der Fehler wegen eines existierenden Terms aufgetreten ist
+                                if ($new_term->get_error_code() === 'term_exists') {
+                                    $existing_term_id = $new_term->get_error_data();
+                                    if (is_array($existing_term_id) && !empty($existing_term_id['term_id'])) {
+                                        $existing_term_id = $existing_term_id['term_id'];
+                                    }
+                                    
+                                    if ($existing_term_id) {
+                                        $term = get_term_by('id', $existing_term_id, $taxonomy);
+                                        
+                                        if (defined('WP_DEBUG') && WP_DEBUG) {
+                                            error_log("Term existiert bereits: '$term_name' (ID: $existing_term_id)");
+                                        }
+                                    }
+                                } else {
+                                    if (defined('WP_DEBUG') && WP_DEBUG) {
+                                        error_log("Fehler beim Erstellen des Terms '$term_name': " . $new_term->get_error_message());
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        if (defined('WP_DEBUG') && WP_DEBUG) {
+                            error_log("Term-Erstellung nicht erlaubt für: '$term_id_or_slug' (durch Filter)");
+                        }
                     }
                 }
             }
             
+            // Term hinzufügen, wenn er gefunden oder erstellt wurde
             if ($term && !is_wp_error($term) && isset($term->name) && isset($term->term_id)) {
                 $terms_sorted[$term->name] = $term->term_id;
             }
@@ -213,24 +420,57 @@ class Crocoblock_Sync_Core {
 
         // Wenn keine gültigen Terms gefunden wurden
         if (empty($terms_sorted)) {
-            wp_set_object_terms($post_id, array(), $taxonomy);
-            return array(
-                'status' => 'cleared',
-                'meta_field' => $meta_field,
-                'taxonomy' => $taxonomy,
-                'terms' => array()
-            );
+            // Sollen wir bestehende Terms beibehalten oder löschen?
+            $clear_terms = apply_filters('crocoblock_sync_clear_terms_on_empty', true, $post_id, $meta_field, $taxonomy);
+            
+            if ($clear_terms) {
+                $result = wp_set_object_terms($post_id, array(), $taxonomy);
+                
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log("Keine gültigen Terms gefunden. Alle Terms für Taxonomie '$taxonomy' gelöscht.");
+                }
+                
+                return array(
+                    'status' => 'cleared',
+                    'meta_field' => $meta_field,
+                    'taxonomy' => $taxonomy,
+                    'terms' => array()
+                );
+            } else {
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log("Keine gültigen Terms gefunden. Bestehende Terms beibehalten (durch Filter).");
+                }
+                
+                return array(
+                    'status' => 'skipped',
+                    'meta_field' => $meta_field,
+                    'taxonomy' => $taxonomy,
+                    'terms' => array()
+                );
+            }
         }
 
         // Sortieren und Taxonomie-Terme setzen
         ksort($terms_sorted);
-        $result = wp_set_object_terms($post_id, array_values($terms_sorted), $taxonomy, false);
+        $term_ids = array_values($terms_sorted);
+        
+        // Bestimmen, ob Terms ersetzt oder hinzugefügt werden sollen
+        $append_terms = apply_filters('crocoblock_sync_append_terms', false, $post_id, $meta_field, $taxonomy);
+        
+        // Wichtig: append=false bedeutet, dass bestehende Terms ersetzt werden
+        // append=true bedeutet, dass die neuen Terms zu den bestehenden hinzugefügt werden
+        $result = wp_set_object_terms($post_id, $term_ids, $taxonomy, $append_terms);
+        
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            $operation = $append_terms ? 'hinzugefügt' : 'ersetzt';
+            error_log("Terms für Taxonomie '$taxonomy' $operation: " . implode(', ', $term_ids));
+        }
         
         return array(
             'status' => is_wp_error($result) ? 'error' : 'success',
             'meta_field' => $meta_field,
             'taxonomy' => $taxonomy,
-            'terms' => array_values($terms_sorted),
+            'terms' => $term_ids,
             'created_terms' => $created_terms, // Neu erstellte Terms zurückgeben
             'error' => is_wp_error($result) ? $result->get_error_message() : null
         );
@@ -283,27 +523,15 @@ class Crocoblock_Sync_Core {
             return;
         }
         
-        // Prüfen, ob Meta-Felder existieren bevor wir versuchen zu synchronisieren
+        // Mappings aus der admin.php abrufen
         $mappings = get_option('ir_sync_field_mappings', array());
-        $meta_fields_exist = true;
-        $missing_fields = array();
         
-        foreach ($mappings as $mapping) {
-            if ($mapping['active'] && $mapping['post_type'] === $post_type) {
-                if (!metadata_exists('post', $post_id, $mapping['meta_field'])) {
-                    $meta_fields_exist = false;
-                    $missing_fields[] = $mapping['meta_field'];
-                }
-            }
-        }
-    
-        // Wenn Meta-Felder fehlen, gib eine spezifische Fehlermeldung zurück
-        if (!$meta_fields_exist) {
-            wp_send_json_error('Bitte speichern Sie den Beitrag zuerst als Entwurf oder veröffentlichen Sie ihn, bevor Sie synchronisieren. Die folgenden Felder wurden nicht gefunden: ' . implode(', ', $missing_fields));
+        if (empty($mappings)) {
+            wp_send_json_error('Keine Mapping-Konfigurationen gefunden. Bitte definieren Sie zuerst Mappings in den Plugin-Einstellungen.');
             return;
         }
-
-        // Mappings abrufen
+        
+        // Nur relevante Mappings für diesen Post-Typ filtern
         $relevant_mappings = array();
         foreach ($mappings as $mapping) {
             if ($mapping['active'] && $mapping['post_type'] === $post_type) {
@@ -313,13 +541,53 @@ class Crocoblock_Sync_Core {
         
         // Wenn keine relevanten Mappings gefunden wurden
         if (empty($relevant_mappings)) {
-            wp_send_json_error('Keine Mapping-Konfigurationen für diesen Beitragstyp gefunden.');
+            wp_send_json_error('Keine aktiven Mapping-Konfigurationen für diesen Beitragstyp ('.$post_type.') gefunden.');
             return;
         }
-
-        // Alle relevanten Felder synchronisieren
-        $results = array();
+        
+        // Prüfen, ob Meta-Felddaten existieren, bevor wir versuchen zu synchronisieren
+        $meta_field_data_exists = false;
+        $available_mappings = array();
+        $missing_fields = array();
+        
         foreach ($relevant_mappings as $mapping) {
+            // Prüfen, ob das Meta-Feld existiert (es wurde für diesen Post definiert)
+            if (metadata_exists('post', $post_id, $mapping['meta_field'])) {
+                // Feldwert abrufen
+                $field_value = get_post_meta($post_id, $mapping['meta_field'], true);
+                
+                // Prüfen, ob das Feld einen Wert hat, der synchronisiert werden kann
+                if (!empty($field_value) || $field_value === '0' || $field_value === 0) {
+                    $meta_field_data_exists = true;
+                    $available_mappings[] = $mapping;
+                } else {
+                    // Feld existiert, hat aber keinen Wert zum Synchronisieren
+                    if (defined('WP_DEBUG') && WP_DEBUG) {
+                        error_log("Feld '{$mapping['meta_field']}' existiert, hat aber keinen Wert zum Synchronisieren.");
+                    }
+                }
+            } else {
+                // Feld existiert nicht für diesen Post
+                $missing_fields[] = $mapping['meta_field'];
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log("Feld '{$mapping['meta_field']}' existiert nicht für Post ID $post_id.");
+                }
+            }
+        }
+        
+        // Wenn keine Metadaten zum Synchronisieren vorhanden sind
+        if (!$meta_field_data_exists) {
+            if (!empty($missing_fields)) {
+                wp_send_json_error('Die folgenden Meta-Felder wurden nicht gefunden oder sind leer: ' . implode(', ', $missing_fields));
+            } else {
+                wp_send_json_error('Alle konfigurierten Meta-Felder sind leer. Nichts zu synchronisieren.');
+            }
+            return;
+        }
+        
+        // Jetzt nur die Mappings verarbeiten, für die Daten vorhanden sind
+        $results = array();
+        foreach ($available_mappings as $mapping) {
             $result = $this->sync_single_field(
                 $post_id,
                 $mapping['meta_field'],
@@ -334,6 +602,7 @@ class Crocoblock_Sync_Core {
         $error_messages = array();
         $term_count = 0;
         $created_terms = array(); // Neu erstellte Terms sammeln
+        $updated_taxonomies = array(); // Sammelt alle aktualisierten Taxonomien mit ihren Terms
 
         foreach ($results as $field => $result) {
             if ($result === false) {
@@ -350,26 +619,70 @@ class Crocoblock_Sync_Core {
                         $created_terms[] = $created_term;
                     }
                 }
+                
+                // Taxonomie-Informationen für das Frontend sammeln
+                if (isset($result['taxonomy']) && !empty($result['taxonomy'])) {
+                    $taxonomy = $result['taxonomy'];
+                    
+                    // Alle Terms für diese Taxonomie abrufen
+                    $all_terms = get_terms(array(
+                        'taxonomy' => $taxonomy,
+                        'hide_empty' => false,
+                        'fields' => 'all'
+                    ));
+                    
+                    if (!is_wp_error($all_terms) && !empty($all_terms)) {
+                        $terms_data = array();
+                        
+                        foreach ($all_terms as $term) {
+                            $terms_data[] = array(
+                                'id' => $term->term_id,
+                                'name' => $term->name,
+                                'slug' => $term->slug
+                            );
+                        }
+                        
+                        // Alphabetisch nach Name sortieren
+                        usort($terms_data, function($a, $b) {
+                            return strnatcasecmp($a['name'], $b['name']);
+                        });
+                        
+                        $updated_taxonomies[$taxonomy] = $terms_data;
+                    }
+                }
             }
         }
         
         // Wenn Fehler aufgetreten sind
         if (!empty($error_messages)) {
-            // Spezielle Behandlung für Fehler, die durch fehlende Meta-Felder verursacht werden
-            $test_all_fields_missing = true;
-            foreach ($relevant_mappings as $mapping) {
-                if (metadata_exists('post', $post_id, $mapping['meta_field'])) {
-                    $test_all_fields_missing = false;
-                    break;
+            wp_send_json_error(implode('<br>', $error_messages));
+            return;
+        }
+        
+        // Wenn keine Felder erfolgreich synchronisiert wurden
+        if ($success_count === 0) {
+            wp_send_json_error('Keine Felder konnten synchronisiert werden.');
+            return;
+        }
+        
+        // Rekalkuliere die Gesamtzahl der tatsächlich synchronisierten Terms
+        $term_count = 0;
+        
+        // Die Anzahl der Terms anhand der aktualisierten Taxonomie-Daten ermitteln
+        foreach ($updated_taxonomies as $taxonomy => $terms_data) {
+            // Zähle, wie viele Terms für dieses Post tatsächlich gesetzt wurden
+            $taxonomy_terms = wp_get_object_terms($post_id, $taxonomy, array('fields' => 'ids'));
+            if (!is_wp_error($taxonomy_terms)) {
+                $term_count += count($taxonomy_terms);
+                
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log("Taxonomie $taxonomy: " . count($taxonomy_terms) . " Terms für Post $post_id");
                 }
             }
-            
-            if ($test_all_fields_missing) {
-                wp_send_json_error('Bitte speichern Sie den Beitrag zuerst als Entwurf oder veröffentlichen Sie ihn, bevor Sie synchronisieren.');
-            } else {
-                wp_send_json_error(implode('<br>', $error_messages));
-            }
-            return;
+        }
+        
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log("Insgesamt $term_count Terms für Post $post_id in allen Taxonomien");
         }
         
         // Prüfen, ob mehrere Terme gefunden wurden und ob dies erlaubt ist
@@ -381,7 +694,7 @@ class Crocoblock_Sync_Core {
                 
                 // Finde das entsprechende Mapping für dieses Feld
                 $mapping_found = false;
-                foreach ($relevant_mappings as $mapping) {
+                foreach ($available_mappings as $mapping) {
                     if ($mapping['meta_field'] === $field) {
                         $mapping_found = true;
                         if (!isset($mapping['allow_multiple']) || !$mapping['allow_multiple']) {
@@ -419,7 +732,8 @@ class Crocoblock_Sync_Core {
             'count' => $term_count,
             'fields' => array_keys($results),
             'show_warning' => $multiple_terms_detected,
-            'created_terms' => $created_terms // Neu erstellte Terms an die Antwort anhängen
+            'created_terms' => $created_terms, // Neu erstellte Terms an die Antwort anhängen
+            'updated_taxonomies' => $updated_taxonomies // Vollständige Liste aller Terms für betroffene Taxonomien
         ));
     }
     
