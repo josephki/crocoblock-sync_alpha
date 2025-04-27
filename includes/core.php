@@ -163,36 +163,53 @@ class Crocoblock_Sync_Core {
             error_log("Synchronisiere '$meta_field' mit Taxonomie '$taxonomy'. Wert: " . print_r($selected_terms, true));
         }
         
-        // Leere Werte behandeln
+        // Leere Werte behandeln - immer Terms aus der Taxonomie löschen bei leeren Werten
         if (empty($selected_terms) && $selected_terms !== '0' && $selected_terms !== 0) {
-            // Prüfen, ob wir Terms löschen oder beibehalten sollen
-            $delete_empty_terms = apply_filters('crocoblock_sync_delete_empty_terms', true, $post_id, $meta_field, $taxonomy);
+            // Immer leere Terms löschen, unabhängig vom Filter-Wert
+            $result = wp_set_object_terms($post_id, array(), $taxonomy);
             
-            if ($delete_empty_terms) {
-                $result = wp_set_object_terms($post_id, array(), $taxonomy);
+            // Term-Relationships komplett entfernen
+            global $wpdb;
+            $tt_ids = $wpdb->get_col($wpdb->prepare(
+                "SELECT tt.term_taxonomy_id 
+                 FROM {$wpdb->term_taxonomy} tt 
+                 WHERE tt.taxonomy = %s",
+                $taxonomy
+            ));
+            
+            if (!empty($tt_ids)) {
+                $tt_ids_str = implode(',', array_map('intval', $tt_ids));
+                $wpdb->query($wpdb->prepare(
+                    "DELETE FROM {$wpdb->term_relationships} 
+                     WHERE object_id = %d 
+                     AND term_taxonomy_id IN ({$tt_ids_str})",
+                    $post_id
+                ));
                 
-                if (defined('WP_DEBUG') && WP_DEBUG) {
-                    error_log("Leerer Wert: Alle Terms für Taxonomie '$taxonomy' gelöscht");
+                // Term-Counts aktualisieren
+                foreach ($tt_ids as $tt_id) {
+                    wp_update_term_count($tt_id, $taxonomy);
                 }
-                
-                return array(
-                    'status' => 'cleared',
-                    'meta_field' => $meta_field,
-                    'taxonomy' => $taxonomy,
-                    'terms' => array()
-                );
-            } else {
-                if (defined('WP_DEBUG') && WP_DEBUG) {
-                    error_log("Leerer Wert: Bestehende Terms für Taxonomie '$taxonomy' beibehalten (durch Filter)");
-                }
-                
-                return array(
-                    'status' => 'skipped',
-                    'meta_field' => $meta_field,
-                    'taxonomy' => $taxonomy,
-                    'terms' => array()
-                );
             }
+            
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log("Leerer Wert: Alle Terms für Taxonomie '$taxonomy' vollständig aus der Datenbank gelöscht");
+            }
+            
+            // Zusätzlich das Meta-Feld löschen, wenn es leer ist
+            if (metadata_exists('post', $post_id, $meta_field)) {
+                delete_post_meta($post_id, $meta_field);
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log("Leeres Meta-Feld '$meta_field' wurde aus der Datenbank gelöscht");
+                }
+            }
+            
+            return array(
+                'status' => 'cleared',
+                'meta_field' => $meta_field,
+                'taxonomy' => $taxonomy,
+                'terms' => array()
+            );
         }
         
         // JetEngine- und andere dynamische Felder können verschiedene Formate liefern
@@ -230,31 +247,53 @@ class Crocoblock_Sync_Core {
             return ($term !== '' && $term !== false && $term !== null);
         });
         
-        // Leere Ergebnisse nach Filterung behandeln
+        // Leere Ergebnisse nach Filterung behandeln - konsequent löschen
         if (empty($selected_terms)) {
-            $delete_empty_terms = apply_filters('crocoblock_sync_delete_empty_terms', true, $post_id, $meta_field, $taxonomy);
+            // Immer Terms löschen bei leeren Werten, unabhängig vom Filter
+            $result = wp_set_object_terms($post_id, array(), $taxonomy);
             
-            if ($delete_empty_terms) {
-                $result = wp_set_object_terms($post_id, array(), $taxonomy);
+            // Term-Relationships komplett entfernen
+            global $wpdb;
+            $tt_ids = $wpdb->get_col($wpdb->prepare(
+                "SELECT tt.term_taxonomy_id 
+                 FROM {$wpdb->term_taxonomy} tt 
+                 WHERE tt.taxonomy = %s",
+                $taxonomy
+            ));
+            
+            if (!empty($tt_ids)) {
+                $tt_ids_str = implode(',', array_map('intval', $tt_ids));
+                $wpdb->query($wpdb->prepare(
+                    "DELETE FROM {$wpdb->term_relationships} 
+                     WHERE object_id = %d 
+                     AND term_taxonomy_id IN ({$tt_ids_str})",
+                    $post_id
+                ));
                 
-                if (defined('WP_DEBUG') && WP_DEBUG) {
-                    error_log("Nach Filterung leere Werte: Alle Terms für Taxonomie '$taxonomy' gelöscht");
+                // Term-Counts aktualisieren
+                foreach ($tt_ids as $tt_id) {
+                    wp_update_term_count($tt_id, $taxonomy);
                 }
-                
-                return array(
-                    'status' => 'cleared',
-                    'meta_field' => $meta_field,
-                    'taxonomy' => $taxonomy,
-                    'terms' => array()
-                );
-            } else {
-                return array(
-                    'status' => 'skipped',
-                    'meta_field' => $meta_field,
-                    'taxonomy' => $taxonomy,
-                    'terms' => array()
-                );
             }
+            
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log("Nach Filterung leere Werte: Alle Terms für Taxonomie '$taxonomy' vollständig aus der Datenbank gelöscht");
+            }
+            
+            // Zusätzlich das Meta-Feld löschen, wenn es leer ist
+            if (metadata_exists('post', $post_id, $meta_field)) {
+                delete_post_meta($post_id, $meta_field);
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log("Leeres Meta-Feld '$meta_field' nach Filterung wurde aus der Datenbank gelöscht");
+                }
+            }
+            
+            return array(
+                'status' => 'cleared',
+                'meta_field' => $meta_field,
+                'taxonomy' => $taxonomy,
+                'terms' => array()
+            );
         }
         
         // Alle Terms der Taxonomie abrufen für besseren Duplikat-Check
@@ -420,50 +459,62 @@ class Crocoblock_Sync_Core {
 
         // Wenn keine gültigen Terms gefunden wurden
         if (empty($terms_sorted)) {
-            // Sollen wir bestehende Terms beibehalten oder löschen?
-            $clear_terms = apply_filters('crocoblock_sync_clear_terms_on_empty', true, $post_id, $meta_field, $taxonomy);
+            // Immer Terms löschen bei leeren Werten, unabhängig vom Filter
+            $result = wp_set_object_terms($post_id, array(), $taxonomy);
             
-            if ($clear_terms) {
-                $result = wp_set_object_terms($post_id, array(), $taxonomy);
+            // Term-Relationships komplett entfernen
+            global $wpdb;
+            $tt_ids = $wpdb->get_col($wpdb->prepare(
+                "SELECT tt.term_taxonomy_id 
+                 FROM {$wpdb->term_taxonomy} tt 
+                 WHERE tt.taxonomy = %s",
+                $taxonomy
+            ));
+            
+            if (!empty($tt_ids)) {
+                $tt_ids_str = implode(',', array_map('intval', $tt_ids));
+                $wpdb->query($wpdb->prepare(
+                    "DELETE FROM {$wpdb->term_relationships} 
+                     WHERE object_id = %d 
+                     AND term_taxonomy_id IN ({$tt_ids_str})",
+                    $post_id
+                ));
                 
-                if (defined('WP_DEBUG') && WP_DEBUG) {
-                    error_log("Keine gültigen Terms gefunden. Alle Terms für Taxonomie '$taxonomy' gelöscht.");
+                // Term-Counts aktualisieren
+                foreach ($tt_ids as $tt_id) {
+                    wp_update_term_count($tt_id, $taxonomy);
                 }
-                
-                return array(
-                    'status' => 'cleared',
-                    'meta_field' => $meta_field,
-                    'taxonomy' => $taxonomy,
-                    'terms' => array()
-                );
-            } else {
-                if (defined('WP_DEBUG') && WP_DEBUG) {
-                    error_log("Keine gültigen Terms gefunden. Bestehende Terms beibehalten (durch Filter).");
-                }
-                
-                return array(
-                    'status' => 'skipped',
-                    'meta_field' => $meta_field,
-                    'taxonomy' => $taxonomy,
-                    'terms' => array()
-                );
             }
+            
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log("Keine gültigen Terms gefunden. Alle Terms für Taxonomie '$taxonomy' vollständig aus der Datenbank gelöscht");
+            }
+            
+            // Zusätzlich das Meta-Feld löschen, wenn es leer ist
+            if (metadata_exists('post', $post_id, $meta_field)) {
+                delete_post_meta($post_id, $meta_field);
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log("Leeres Meta-Feld '$meta_field' (keine gültigen Terms) wurde aus der Datenbank gelöscht");
+                }
+            }
+            
+            return array(
+                'status' => 'cleared',
+                'meta_field' => $meta_field,
+                'taxonomy' => $taxonomy,
+                'terms' => array()
+            );
         }
 
         // Sortieren und Taxonomie-Terme setzen
         ksort($terms_sorted);
         $term_ids = array_values($terms_sorted);
         
-        // Bestimmen, ob Terms ersetzt oder hinzugefügt werden sollen
-        $append_terms = apply_filters('crocoblock_sync_append_terms', false, $post_id, $meta_field, $taxonomy);
-        
-        // Wichtig: append=false bedeutet, dass bestehende Terms ersetzt werden
-        // append=true bedeutet, dass die neuen Terms zu den bestehenden hinzugefügt werden
-        $result = wp_set_object_terms($post_id, $term_ids, $taxonomy, $append_terms);
+        // Terme immer ersetzen, nicht anhängen, damit keine verwaisten Einträge bestehen bleiben
+        $result = wp_set_object_terms($post_id, $term_ids, $taxonomy, false);
         
         if (defined('WP_DEBUG') && WP_DEBUG) {
-            $operation = $append_terms ? 'hinzugefügt' : 'ersetzt';
-            error_log("Terms für Taxonomie '$taxonomy' $operation: " . implode(', ', $term_ids));
+            error_log("Terms für Taxonomie '$taxonomy' ersetzt: " . implode(', ', $term_ids));
         }
         
         return array(
