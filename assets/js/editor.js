@@ -11,8 +11,43 @@
         let isSyncing = false;
         let headerButtonInserted = false; // Header-Button-Tracking
         
-        // Debug-Ausgabe
+        // Globalen Refresh-Lock einrichten, um mehrfache Refreshes zu verhindern
+        // Diese Variable ist für andere Skripte sichtbar und kann als Indikator dienen
+        window.irSyncRefreshInProgress = false;
+        
+        // WICHTIG: Eindeutig prüfen, ob wir uns auf einer Post-Edit-Seite befinden
+        const isEditPage = window.location.href.includes('post.php') && 
+                           window.location.href.includes('action=edit');
+        
+        // Prüfen, ob ein externes Snippet aktiv ist (über URL-Parameter)
+        const hasExternalSnippet = window.location.href.includes('snippet=') || 
+                                  window.location.href.includes('shortcode=') ||
+                                  window.location.href.includes('code_snippet=');
+        
+        // Wenn ein externes Snippet aktiv ist, deaktivieren wir den Auto-Refresh
+        if (hasExternalSnippet) {
+            console.log('Externes Snippet erkannt, Auto-Refresh wird deaktiviert');
+            window.irSyncRefreshInProgress = true; // Block setzen, um Refreshes zu verhindern
+        }
+        
+        // Noch striktere Prüfung, nur auf tatsächlichen Post-Editor-Seiten neuladen
+        let isRelevantPostType = false;
+        if (isEditPage && irSyncData && irSyncData.postType && irSyncData.mappings) {
+            // Prüfen, ob der aktuelle Post-Typ in den Mappings konfiguriert ist
+            for (const id in irSyncData.mappings) {
+                if (irSyncData.mappings[id].active && 
+                    irSyncData.mappings[id].post_type === irSyncData.postType) {
+                    isRelevantPostType = true;
+                    break;
+                }
+            }
+        }
+        
         console.log('IR Tours Sync - Debug Info:');
+        console.log('Aktuelle Seite ist Post-Editor-Seite:', isEditPage);
+        console.log('Aktueller Post-Typ ist relevant:', isRelevantPostType);
+        console.log('Externes Snippet erkannt:', hasExternalSnippet);
+        console.log('Refresh-Lock aktiv:', window.irSyncRefreshInProgress);
         console.log('irSyncData vollständig:', irSyncData);
         
         // Debug-Ausgabe der Originalnachrichten
@@ -392,11 +427,24 @@
                                     // Erfolgsmeldung anzeigen
                                     alert(successMessage);
                                     
-                                    // Nach dem erfolgreichen Speichern die Seite neu laden
-                                    setTimeout(() => { 
-                                        isSyncing = false;
+                                    // Status zurücksetzen
+                                    isSyncing = false;
+                                    
+                                    // Nur auf CPT-Edit-Seiten neuladen und nur, wenn kein anderer Refresh läuft
+                                    if (isEditPage && isRelevantPostType && !window.irSyncRefreshInProgress) {
+                                        console.log('Lade Seite neu (nur auf relevanter Edit-Seite)...');
+                                        // Lock setzen, um mehrfache Refreshes zu verhindern
+                                        window.irSyncRefreshInProgress = true;
                                         window.location.reload();
-                                    }, 1000);
+                                    } else {
+                                        if (window.irSyncRefreshInProgress) {
+                                            console.log('Refresh bereits im Gange, verhindere weiteren Refresh');
+                                        } else {
+                                            console.log('Kein Reload: Nicht auf einer relevanten Edit-Seite', 
+                                                       'isEditPage:', isEditPage, 
+                                                       'isRelevantPostType:', isRelevantPostType);
+                                        }
+                                    }
                                 }).catch(error => {
                                     console.error('Speichern fehlgeschlagen:', error);
                                     syncStatus.text('Fehler beim Speichern');
@@ -422,11 +470,24 @@
                                     // Erfolgsmeldung anzeigen
                                     alert(successMessage);
                                     
-                                    // Nach dem erfolgreichen Speichern die Seite neu laden
-                                    setTimeout(() => { 
-                                        isSyncing = false;
+                                    // Status zurücksetzen
+                                    isSyncing = false;
+                                    
+                                    // Nur auf CPT-Edit-Seiten neuladen und nur, wenn kein anderer Refresh läuft
+                                    if (isEditPage && isRelevantPostType && !window.irSyncRefreshInProgress) {
+                                        console.log('Lade Seite neu (nur auf relevanter Edit-Seite)...');
+                                        // Lock setzen, um mehrfache Refreshes zu verhindern
+                                        window.irSyncRefreshInProgress = true;
                                         window.location.reload();
-                                    }, 1000);
+                                    } else {
+                                        if (window.irSyncRefreshInProgress) {
+                                            console.log('Refresh bereits im Gange, verhindere weiteren Refresh');
+                                        } else {
+                                            console.log('Kein Reload: Nicht auf einer relevanten Edit-Seite', 
+                                                       'isEditPage:', isEditPage, 
+                                                       'isRelevantPostType:', isRelevantPostType);
+                                        }
+                                    }
                                 }).catch(error => {
                                     console.error('Speichern fehlgeschlagen:', error);
                                     syncStatus.text('Fehler beim Speichern');
@@ -448,9 +509,23 @@
                             btn.prop('disabled', false).text(buttonText);
                             isSyncing = false;
                             
-                            // Dem Benutzer Zeit zum manuellen Speichern geben, dann reload
+                            // Dem Benutzer Zeit zum manuellen Speichern geben, dann reload (nur auf Edit-Seite)
                             setTimeout(() => {
-                                window.location.reload();
+                                // Nur auf CPT-Edit-Seiten neuladen und nur, wenn kein anderer Refresh läuft
+                                if (isEditPage && isRelevantPostType && !window.irSyncRefreshInProgress) {
+                                    console.log('Lade Seite neu (nur auf relevanter Edit-Seite) nach manuellem Speichern...');
+                                    // Lock setzen, um mehrfache Refreshes zu verhindern
+                                    window.irSyncRefreshInProgress = true;
+                                    window.location.reload();
+                                } else {
+                                    if (window.irSyncRefreshInProgress) {
+                                        console.log('Refresh bereits im Gange, verhindere weiteren Refresh');
+                                    } else {
+                                        console.log('Kein Reload: Nicht auf einer relevanten Edit-Seite', 
+                                                   'isEditPage:', isEditPage, 
+                                                   'isRelevantPostType:', isRelevantPostType);
+                                    }
+                                }
                             }, 5000); // 5 Sekunden Wartezeit für manuelles Speichern
                         }
                         

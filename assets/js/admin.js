@@ -174,54 +174,93 @@
             $select.select2({
                 placeholder: 'Meta-Feld auswählen oder eingeben',
                 allowClear: true,
-                tags: true
-            });
-            
-            // Meta-Felder laden
-            debugLog('Lade Meta-Felder via AJAX für Post-Typ', postType);
-            
-            $.ajax({
-                url: irSyncAdmin.ajaxurl,
-                type: 'GET',
-                data: {
-                    action: 'ir_get_field_names',
-                    nonce: irSyncAdmin.nonce,
-                    post_type: postType,
-                    search_type: 'meta_field'
+                tags: true,
+                language: {
+                    noResults: function() {
+                        return "Keine Ergebnisse gefunden";
+                    },
+                    searching: function() {
+                        return "Suche...";
+                    }
                 },
-                success: function(response) {
-                    // Select leeren
-                    $select.empty();
-                    
-                    if (response.success && response.data) {
+                ajax: {
+                    url: irSyncAdmin.ajaxurl,
+                    dataType: 'json',
+                    delay: 250,
+                    cache: true,
+                    data: function(params) {
+                        return {
+                            action: 'ir_get_field_names',
+                            nonce: irSyncAdmin.nonce,
+                            post_type: postType,
+                            search_type: 'meta_field',
+                            search: params.term || '',
+                            page: params.page || 1
+                        };
+                    },
+                    processResults: function(response, params) {
+                        if (!response.success) {
+                            debugError('AJAX-Fehler beim Laden der Meta-Felder:', response);
+                            return {
+                                results: []
+                            };
+                        }
+                        
                         debugLog('Meta-Felder geladen:', response.data.length, 'Felder gefunden');
                         
-                        // Optionen hinzufügen
-                        $.each(response.data, function(index, field) {
-                            $select.append(new Option(field.text, field.id, false, field.id === currentValue));
-                        });
-                        
-                        // Wenn der aktuelle Wert nicht in den Optionen ist, füge ihn hinzu
-                        if (currentValue && !$select.find('option[value="' + currentValue + '"]').length) {
-                            debugLog('Aktueller Wert nicht in Optionen gefunden, füge hinzu:', currentValue);
-                            $select.append(new Option(currentValue, currentValue, false, true));
-                        }
-                    } else {
-                        debugError('Fehler beim Laden der Meta-Felder:', response);
+                        return {
+                            results: response.data,
+                            pagination: {
+                                more: false
+                            }
+                        };
+                    },
+                    error: function(xhr, status, error) {
+                        debugError('AJAX-Fehler beim Laden der Meta-Felder:', { xhr, status, error });
                     }
-                    
-                    // Select2 aktualisieren
-                    $select.trigger('change');
-                },
-                error: function(xhr, status, error) {
-                    debugError('AJAX-Fehler beim Laden der Meta-Felder:', { xhr, status, error });
-                    
-                    $select.empty();
-                    $select.append(new Option('Fehler beim Laden', '', false, false));
                 }
             });
+            
+            // Wenn ein aktueller Wert vorhanden ist, diesen hinzufügen
+            if (currentValue) {
+                debugLog('Setze aktuellen Wert für Meta-Feld:', currentValue);
+                
+                // Neue Option erstellen und hinzufügen
+                var newOption = new Option(currentValue, currentValue, true, true);
+                $select.append(newOption);
+                
+                // Aktuellen Wert setzen
+                $select.val(currentValue).trigger('change');
+            }
+            
+            // Bei Fehler oder leerem Ergebnis besser reagieren
+            $select.on('select2:open', function() {
+                debugLog('Meta-Feld-Select geöffnet');
+            });
+            
+            $select.on('select2:close', function() {
+                debugLog('Meta-Feld-Select geschlossen');
+            });
+            
         } catch (error) {
             debugError('Fehler bei der Initialisierung des Meta-Feld-Selects:', error);
+            
+            // Fallback: einfaches reguläres Dropdown ohne AJAX
+            if ($select.hasClass('select2-hidden-accessible')) {
+                $select.select2('destroy');
+            }
+            
+            $select.empty();
+            $select.append(new Option('Fehler beim Laden (Eingabe möglich)', '', false, false));
+            
+            if (currentValue) {
+                $select.append(new Option(currentValue, currentValue, true, true));
+            }
+            
+            $select.select2({
+                tags: true,
+                placeholder: 'Meta-Feld manuell eingeben'
+            });
         }
     }
     
@@ -251,54 +290,93 @@
             $select.select2({
                 placeholder: 'Taxonomie auswählen oder eingeben',
                 allowClear: true,
-                tags: true
-            });
-            
-            // Taxonomien laden
-            debugLog('Lade Taxonomien via AJAX für Post-Typ', postType);
-            
-            $.ajax({
-                url: irSyncAdmin.ajaxurl,
-                type: 'GET',
-                data: {
-                    action: 'ir_get_field_names',
-                    nonce: irSyncAdmin.nonce,
-                    post_type: postType,
-                    search_type: 'taxonomy'
+                tags: true,
+                language: {
+                    noResults: function() {
+                        return "Keine Ergebnisse gefunden";
+                    },
+                    searching: function() {
+                        return "Suche...";
+                    }
                 },
-                success: function(response) {
-                    // Select leeren
-                    $select.empty();
-                    
-                    if (response.success && response.data) {
+                ajax: {
+                    url: irSyncAdmin.ajaxurl,
+                    dataType: 'json',
+                    delay: 250,
+                    cache: true,
+                    data: function(params) {
+                        return {
+                            action: 'ir_get_field_names',
+                            nonce: irSyncAdmin.nonce,
+                            post_type: postType,
+                            search_type: 'taxonomy',
+                            search: params.term || '',
+                            page: params.page || 1
+                        };
+                    },
+                    processResults: function(response, params) {
+                        if (!response.success) {
+                            debugError('AJAX-Fehler beim Laden der Taxonomien:', response);
+                            return {
+                                results: []
+                            };
+                        }
+                        
                         debugLog('Taxonomien geladen:', response.data.length, 'Taxonomien gefunden');
                         
-                        // Optionen hinzufügen
-                        $.each(response.data, function(index, field) {
-                            $select.append(new Option(field.text, field.id, false, field.id === currentValue));
-                        });
-                        
-                        // Wenn der aktuelle Wert nicht in den Optionen ist, füge ihn hinzu
-                        if (currentValue && !$select.find('option[value="' + currentValue + '"]').length) {
-                            debugLog('Aktueller Wert nicht in Optionen gefunden, füge hinzu:', currentValue);
-                            $select.append(new Option(currentValue, currentValue, false, true));
-                        }
-                    } else {
-                        debugError('Fehler beim Laden der Taxonomien:', response);
+                        return {
+                            results: response.data,
+                            pagination: {
+                                more: false
+                            }
+                        };
+                    },
+                    error: function(xhr, status, error) {
+                        debugError('AJAX-Fehler beim Laden der Taxonomien:', { xhr, status, error });
                     }
-                    
-                    // Select2 aktualisieren
-                    $select.trigger('change');
-                },
-                error: function(xhr, status, error) {
-                    debugError('AJAX-Fehler beim Laden der Taxonomien:', { xhr, status, error });
-                    
-                    $select.empty();
-                    $select.append(new Option('Fehler beim Laden', '', false, false));
                 }
             });
+            
+            // Wenn ein aktueller Wert vorhanden ist, diesen hinzufügen
+            if (currentValue) {
+                debugLog('Setze aktuellen Wert für Taxonomie:', currentValue);
+                
+                // Neue Option erstellen und hinzufügen
+                var newOption = new Option(currentValue, currentValue, true, true);
+                $select.append(newOption);
+                
+                // Aktuellen Wert setzen
+                $select.val(currentValue).trigger('change');
+            }
+            
+            // Bei Fehler oder leerem Ergebnis besser reagieren
+            $select.on('select2:open', function() {
+                debugLog('Taxonomie-Select geöffnet');
+            });
+            
+            $select.on('select2:close', function() {
+                debugLog('Taxonomie-Select geschlossen');
+            });
+            
         } catch (error) {
             debugError('Fehler bei der Initialisierung des Taxonomie-Selects:', error);
+            
+            // Fallback: einfaches reguläres Dropdown ohne AJAX
+            if ($select.hasClass('select2-hidden-accessible')) {
+                $select.select2('destroy');
+            }
+            
+            $select.empty();
+            $select.append(new Option('Fehler beim Laden (Eingabe möglich)', '', false, false));
+            
+            if (currentValue) {
+                $select.append(new Option(currentValue, currentValue, true, true));
+            }
+            
+            $select.select2({
+                tags: true,
+                placeholder: 'Taxonomie manuell eingeben'
+            });
         }
     }
     

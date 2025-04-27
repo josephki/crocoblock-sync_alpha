@@ -17,6 +17,8 @@ Das Crocoblock Sync Plugin ermöglicht es, Meta-Felder in WordPress automatisch 
 - **Konfigurierbare Mappings**: Erlaubt benutzerdefinierte Zuordnungen zwischen Meta-Feldern und Taxonomien
 - **Anpassbare Meldungen**: Alle Nachrichten und Warnungen können über die Einstellungen angepasst werden
 - **Multiple-Selection-Warnung**: Optionale Warnungen bei mehreren ausgewählten Termen, wenn dies nicht erwünscht ist
+- **Intelligente Seitenaktualisierung**: Aktualisiert nur relevante Post-Editor-Seiten und vermeidet Konflikte mit anderen Skripten
+- **Snippet-Kompatibilität**: Erkennt externe Code-Snippets und verhindert unerwünschte Seitenaktualisierungen
 
 ## Installation
 
@@ -58,7 +60,7 @@ Nach der Aktivierung findest du die Einstellungen unter "Einstellungen" > "Croco
 2. Neue Taxonomie-Terme werden bei Bedarf automatisch erstellt
 3. Die Benutzeroberfläche wird aktualisiert, um neue Terme anzuzeigen
 4. Der Beitrag wird gespeichert
-5. Die Seite wird neu geladen, um alle Änderungen anzuzeigen
+5. Die Seite wird neu geladen, um alle Änderungen anzuzeigen (nur auf Post-Editor-Seiten)
 
 ## Technische Informationen
 
@@ -68,12 +70,30 @@ Nach der Aktivierung findest du die Einstellungen unter "Einstellungen" > "Croco
 - Unterstützt mehrere Meta-Feld-Taxonomie-Zuordnungen
 - Intelligente Fehlererkennung und Behandlung
 - Alphabetische Sortierung der Taxonomie-Terme
+- Vermeidet Konflikte mit externen Snippets und anderen Plugins
+
+## Kompatibilität mit Snippets
+
+Das Plugin wurde entwickelt, um ordnungsgemäß mit anderen Code-Snippets zu arbeiten:
+
+- Automatische Erkennung von Code-Snippets über URL-Parameter
+- Verwendung eines globalen Refresh-Locks zur Vermeidung von Konflikten
+- Präzise Erkennung von Post-Editor-Umgebungen
+- Ausführliche Konsolenausgaben für Debugging-Zwecke
 
 ## Entwickler
 
 Joseph Kisler - Webwerkstatt, Freiung 16/2/4, A-4600 Wels
 
 ## Versionsverlauf
+
+### 1.2
+- Verbessertes Seitenaktualisierungssystem mit strikter Typ- und URL-Validierung
+- Vermeidung unerwünschter wiederholter Refreshes
+- Einführung eines globalen Refresh-Locks zur Vermeidung von Konflikten
+- Automatische Snippet-Erkennung zur Verbesserung der Kompatibilität
+- Intelligentere Seitenaktualisierung, die nur auf relevanten Seiten stattfindet
+- Detaillierte Debug-Ausgaben für eine einfachere Fehlerbehebung
 
 ### 1.1
 - Automatisches Neuladen der Seite nach Synchronisation
