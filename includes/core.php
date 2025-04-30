@@ -31,6 +31,13 @@ class Crocoblock_Sync_Core {
         
         // Admin-Hinweis für mehrere Reisethemen
         add_action('admin_notices', array($this, 'display_reisethemen_warning'));
+        
+        // Direktes Einfügen des Sync-Buttons im klassischen Editor
+        // Erhöhte Priorität (1), um sicherzustellen, dass es vor anderen Elementen ausgeführt wird
+        add_action('post_submitbox_misc_actions', array($this, 'add_sync_button_next_to_publish'), 1);
+        
+        // JavaScript für den Sync-Button im Footer laden (hohe Priorität, um sicherzustellen, dass es nach allem anderen ausgeführt wird)
+        add_action('admin_footer', array($this, 'add_sync_button_script'), 999);
     }
     
     /**
@@ -40,9 +47,18 @@ class Crocoblock_Sync_Core {
         if (isset($_GET['reisethemen_warning']) && $_GET['reisethemen_warning'] === '1') {
             // Benutzerdefinierte Nachricht aus den Einstellungen holen
             $messages = get_option('ir_sync_messages', array());
+            
+            // Prüfen, ob die Nachricht aktiviert ist
+            $is_active = isset($messages['multiple_themes_active']) ? $messages['multiple_themes_active'] : true;
+            
+            // Wenn Nachricht deaktiviert ist, keine Warnung anzeigen
+            if (!$is_active) {
+                return;
+            }
+            
             $warning_message = isset($messages['multiple_themes']) && !empty($messages['multiple_themes']) 
                 ? $messages['multiple_themes'] 
-                : 'Sie haben mehrere Reisethemen ausgewählt. Sind Sie sicher, dass Sie speichern möchten?';
+                : 'Sie haben mehrere Reisethemen gewählt. Sind Sie sicher, dass Sie speichern möchten?';
             
             echo '<div class="notice notice-warning is-dismissible">
                 <p><strong>Achtung:</strong> ' . esc_html($warning_message) . '</p>
@@ -242,9 +258,23 @@ class Crocoblock_Sync_Core {
             }
         }
 
-        // Ungültige Werte filtern und Whitespace entfernen
+        // Filter für numerische Checkboxen hinzufügen
+        // Verhindert, dass Terms wie "checkbox-1", "checkbox-2" erstellt werden
         $selected_terms = array_filter($selected_terms, function($term) {
-            return ($term !== '' && $term !== false && $term !== null);
+            // Ungültige Werte filtern und Whitespace entfernen
+            if ($term === '' || $term === false || $term === null) {
+                return false;
+            }
+            
+            // Prüfen, ob es sich um eine numerische Checkbox handelt
+            if (is_string($term) && preg_match('/^checkbox-\d+$/', $term)) {
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log("Numerische Checkbox '$term' wird gefiltert und ignoriert");
+                }
+                return false;
+            }
+            
+            return true;
         });
         
         // Leere Ergebnisse nach Filterung behandeln - konsequent löschen
@@ -765,12 +795,24 @@ class Crocoblock_Sync_Core {
         
         // Erfolg
         $messages = get_option('ir_sync_messages', array());
-        $success_message = isset($messages['sync_success']) 
-            ? sprintf($messages['sync_success'], $term_count)
-            : sprintf('Felder erfolgreich synchronisiert. (%d Terme gesetzt)', $term_count);
         
-        // Füge eine Nachricht über neu erstellte Terms hinzu, wenn vorhanden
-        if (!empty($created_terms)) {
+        // Prüfen, ob Erfolgsnachricht aktiviert ist
+        $success_active = isset($messages['sync_success_active']) ? $messages['sync_success_active'] : true;
+        $success_message = '';
+        
+        if ($success_active) {
+            $success_message = isset($messages['sync_success']) 
+                ? sprintf($messages['sync_success'], $term_count)
+                : sprintf('Felder erfolgreich synchronisiert. (%d Terme gesetzt)', $term_count);
+        } else {
+            $success_message = sprintf('Felder synchronisiert. (%d Terme)', $term_count);
+        }
+        
+        // Prüfen, ob "Neue Terms erstellt" Nachricht aktiviert ist
+        $terms_created_active = isset($messages['terms_created_active']) ? $messages['terms_created_active'] : true;
+        
+        // Füge eine Nachricht über neu erstellte Terms hinzu, wenn vorhanden und aktiviert
+        if (!empty($created_terms) && $terms_created_active) {
             $terms_created_message = isset($messages['terms_created']) 
                 ? sprintf($messages['terms_created'], implode(', ', $created_terms))
                 : sprintf('Neue Terms erstellt: %s', implode(', ', $created_terms));
@@ -826,6 +868,15 @@ class Crocoblock_Sync_Core {
         if (!in_array($post->post_type, $relevant_post_types)) {
             return;
         }
+
+        // Prüfen, ob wir uns im klassischen Editor befinden (unabhängig von den Editor-Einstellungen)
+        $is_classic_editor = false;
+        if (isset($_GET['post']) && !isset($_GET['action'])) {
+            $is_classic_editor = true;
+        } else if (isset($_GET['post']) && isset($_GET['action']) && $_GET['action'] === 'edit') {
+            // Wenn die URL ein post und action=edit enthält, sind wir im klassischen Editor
+            $is_classic_editor = true;
+        }
         
         // Allgemeine Einstellungen abrufen
         $general_settings = get_option('ir_sync_general_settings', array());
@@ -861,11 +912,17 @@ class Crocoblock_Sync_Core {
         // Sicherstellen, dass alle erforderlichen Schlüssel vorhanden sind
         $default_messages = array(
             'multiple_themes' => 'Sie haben 2 oder mehr Reisethemen gewählt. Sind Sie sicher, dass Sie speichern möchten?',
+            'multiple_themes_active' => true,
             'sync_button' => 'Synchronisieren & Speichern',
+            'sync_button_active' => true,
             'sync_reminder' => 'Sie haben vergessen zu synchronisieren. Bitte drücken Sie zuerst den Synchronisations-Button. Danke.',
+            'sync_reminder_active' => true,
             'sync_success' => 'Felder erfolgreich synchronisiert. (%d Terme gesetzt)',
+            'sync_success_active' => true,
             'sync_error' => 'Synchronisation fehlgeschlagen. Bitte versuchen Sie es erneut.',
-            'terms_created' => 'Neue Terms erstellt: %s' // Neue Nachricht für erstellte Terms
+            'sync_error_active' => true,
+            'terms_created' => 'Neue Terms erstellt: %s',
+            'terms_created_active' => true
         );
 
         // Fehlende Schlüssel aus den Standardwerten ergänzen
@@ -878,6 +935,9 @@ class Crocoblock_Sync_Core {
         // Optionales Debug-Logging
         if ($debug_mode) {
             error_log('IR Tours Sync - Messages für JavaScript: ' . print_r($messages, true));
+            if ($is_classic_editor) {
+                error_log('IR Tours Sync - Klassischer Editor erkannt');
+            }
         }
         
         // Daten für JavaScript bereitstellen - wichtig: sicherstellen, dass messages korrekt übergeben wird
@@ -889,7 +949,8 @@ class Crocoblock_Sync_Core {
             'pluginUrl' => CROCOBLOCK_SYNC_URL,
             'debugMode' => $debug_mode,
             'postType' => $post->post_type,
-            'isElementor' => $is_elementor
+            'isElementor' => $is_elementor,
+            'isClassicEditor' => $is_classic_editor // Zusätzliche Information für JavaScript
         ));
     }
     
@@ -899,6 +960,365 @@ class Crocoblock_Sync_Core {
     public function enqueue_elementor_scripts() {
         // Verwende die gemeinsame Funktion für beide Editoren
         $this->enqueue_editor_scripts();
+    }
+    
+    /**
+     * Fügt den Sync-Button direkt neben dem Aktualisieren-Button im klassischen Editor ein
+     */
+    public function add_sync_button_next_to_publish() {
+        global $post;
+        
+        if (!$post) {
+            return;
+        }
+        
+        // Mappings abrufen, um zu prüfen, ob es sich um einen relevanten Post-Typ handelt
+        $mappings = get_option('ir_sync_field_mappings', array());
+        
+        // Post-Typen aus den Mappings extrahieren
+        $relevant_post_types = array();
+        foreach ($mappings as $mapping) {
+            if ($mapping['active'] && !in_array($mapping['post_type'], $relevant_post_types)) {
+                $relevant_post_types[] = $mapping['post_type'];
+            }
+        }
+        
+        // Wenn keine Mappings definiert sind, Standard-Post-Typ verwenden
+        if (empty($relevant_post_types)) {
+            $relevant_post_types = array('ir-tours');
+        }
+        
+        // Prüfen, ob wir uns auf einer relevanten Edit-Seite befinden
+        if (!in_array($post->post_type, $relevant_post_types)) {
+            return;
+        }
+        
+        // Keine direkte Button-Ausgabe mehr, da wir diese über JavaScript erzeugen
+        // Der ursprüngliche rote Button wird entfernt, um doppelte Buttons zu vermeiden
+    }
+    
+    /**
+     * Fügt das JavaScript für den Sync-Button im klassischen Editor ein
+     */
+    public function add_sync_button_script() {
+        // Nur auf der Edit-Seite ausführen
+        $screen = get_current_screen();
+        if (!$screen || $screen->base !== 'post') {
+            return;
+        }
+        
+        // Nachrichten abrufen
+        $messages = get_option('ir_sync_messages', array());
+        $is_error_active = isset($messages['sync_error_active']) ? $messages['sync_error_active'] : true;
+        $is_success_active = isset($messages['sync_success_active']) ? $messages['sync_success_active'] : true;
+        
+        ?>
+        <script type="text/javascript">
+        document.addEventListener('DOMContentLoaded', function() {
+            // Alle Sync-Buttons finden
+            var syncButtons = document.querySelectorAll('#ir-sync-php-button, #ir-sync-php-button-top');
+            
+            // Event-Listener zu jedem Button hinzufügen
+            syncButtons.forEach(function(button) {
+                button.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    
+                    // Button-Status aktualisieren
+                    var originalText = button.textContent;
+                    button.disabled = true;
+                    button.textContent = '⏳ Synchronisiere...';
+                    
+                    // Post-ID aus URL holen
+                    var urlParams = new URLSearchParams(window.location.search);
+                    var postId = urlParams.get('post');
+                    
+                    if (!postId) {
+                        <?php if ($is_error_active): ?>
+                        alert('Fehler: Konnte Post-ID nicht ermitteln.');
+                        <?php endif; ?>
+                        button.disabled = false;
+                        button.textContent = originalText;
+                        return;
+                    }
+                    
+                    // AJAX-Request mit nativen Methoden
+                    var xhr = new XMLHttpRequest();
+                    xhr.open('POST', ajaxurl, true);
+                    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+                    
+                    xhr.onload = function() {
+                        if (xhr.status === 200) {
+                            try {
+                                var response = JSON.parse(xhr.responseText);
+                                
+                                if (response.success) {
+                                    button.textContent = '✅ Synchronisiert';
+                                    
+                                    <?php if ($is_success_active): ?>
+                                    var successMessage = 'Felder erfolgreich synchronisiert.';
+                                    if (response.data && response.data.message) {
+                                        successMessage = response.data.message;
+                                    } else if (response.data && response.data.count) {
+                                        successMessage = 'Felder erfolgreich synchronisiert. (' + response.data.count + ' Terme gesetzt)';
+                                    }
+                                    
+                                    alert(successMessage);
+                                    <?php endif; ?>
+                                    
+                                    // Nach erfolgreicher Synchronisation Seite neu laden
+                                    setTimeout(function() {
+                                        window.location.reload();
+                                    }, 1000);
+                                } else {
+                                    button.textContent = '❌ Fehler';
+                                    
+                                    <?php if ($is_error_active): ?>
+                                    alert('Fehler bei der Synchronisation: ' + (response.data || 'Unbekannter Fehler'));
+                                    <?php endif; ?>
+                                    
+                                    setTimeout(function() {
+                                        button.disabled = false;
+                                        button.textContent = originalText;
+                                    }, 2000);
+                                }
+                            } catch (e) {
+                                button.textContent = '❌ Fehler';
+                                
+                                <?php if ($is_error_active): ?>
+                                alert('Fehler beim Verarbeiten der Antwort: ' + e.message);
+                                <?php endif; ?>
+                                
+                                setTimeout(function() {
+                                    button.disabled = false;
+                                    button.textContent = originalText;
+                                }, 2000);
+                            }
+                        } else {
+                            button.textContent = '❌ Fehler';
+                            
+                            <?php if ($is_error_active): ?>
+                            alert('AJAX-Fehler: ' + xhr.statusText);
+                            <?php endif; ?>
+                            
+                            setTimeout(function() {
+                                button.disabled = false;
+                                button.textContent = originalText;
+                            }, 2000);
+                        }
+                    };
+                    
+                    xhr.onerror = function() {
+                        button.textContent = '❌ Fehler';
+                        
+                        <?php if ($is_error_active): ?>
+                        alert('Netzwerkfehler bei der Anfrage.');
+                        <?php endif; ?>
+                        
+                        setTimeout(function() {
+                            button.disabled = false;
+                            button.textContent = originalText;
+                        }, 2000);
+                    };
+                    
+                    // _wpnonce aus dem Formular holen
+                    var nonce = '<?php echo wp_create_nonce('ir_sync_nonce'); ?>';
+                    
+                    // Daten senden
+                    xhr.send('action=ir_manual_sync&post_id=' + postId + '&nonce=' + nonce);
+                });
+            });
+            
+            // Platzierung des blauen Buttons direkt neben dem roten Button
+            function placeButtonsNextToPublish() {
+                var publishingAction = document.getElementById('publishing-action');
+                var publishButton = document.getElementById('publish');
+                
+                if (publishingAction && publishButton) {
+                    // Prüfen, ob der Button bereits existiert
+                    if (!document.getElementById('ir-sync-direct-button')) {
+                        // Nur den blauen Button erstellen
+                        var blueButton = document.createElement('button');
+                        blueButton.id = 'ir-sync-direct-button';
+                        blueButton.type = 'button';
+                        blueButton.className = 'button button-primary';
+                        blueButton.textContent = 'Aktualisieren & Sync';
+                        
+                        // Wichtig: Stile für den blauen Button - angepasst für perfekte Ausrichtung
+                        blueButton.style.cssText = `
+                            display: inline-block !important;
+                            margin-right: 5px !important;
+                            vertical-align: middle !important;
+                            background-color: #2271b1 !important;
+                            color: white !important;
+                            border-color: #2271b1 !important;
+                            min-height: 30px !important;
+                            line-height: 2.15384615 !important;
+                            padding: 0 10px !important;
+                            z-index: 100 !important;
+                            float: none !important; 
+                            position: relative !important;
+                            top: 0 !important;
+                        `;
+                        
+                        // Event-Listener für blauen Button
+                        blueButton.addEventListener('click', handleCombinedClick);
+                        
+                        // Button vor dem Aktualisieren-Button einfügen
+                        publishingAction.insertBefore(blueButton, publishButton);
+                        
+                        // Zusätzliche Anpassungen für den publishing-action Container
+                        publishingAction.style.cssText = `
+                            display: inline-flex !important;
+                            justify-content: flex-end !important;
+                            flex-wrap: nowrap !important;
+                            align-items: center !important;
+                            white-space: nowrap !important;
+                            float: right !important;
+                            text-align: right !important;
+                        `;
+                        
+                        // Auch den Publish-Button anpassen
+                        publishButton.style.cssText += `
+                            float: none !important;
+                            position: relative !important;
+                            top: 0 !important;
+                            margin-top: 0 !important;
+                            margin-bottom: 0 !important;
+                        `;
+                        
+                        console.log('IR Tours Sync - Blauer Button wurde eingefügt und ausgerichtet');
+                    }
+                } else {
+                    console.log('IR Tours Sync - Publishing-Action oder Publish-Button konnte nicht gefunden werden');
+                    // Versuche es später noch einmal
+                    setTimeout(placeButtonsNextToPublish, 500);
+                }
+            }
+            
+            // Funktion für den kombinierten Button (Aktualisieren & Sync)
+            function handleCombinedClick(e) {
+                e.preventDefault();
+                
+                // Button-Status aktualisieren
+                var button = e.target;
+                var originalText = button.textContent;
+                button.disabled = true;
+                button.textContent = '⏳ Synchronisiere...';
+                
+                // Post-ID aus URL holen
+                var urlParams = new URLSearchParams(window.location.search);
+                var postId = urlParams.get('post');
+                
+                if (!postId) {
+                    <?php if ($is_error_active): ?>
+                    alert('Fehler: Konnte Post-ID nicht ermitteln.');
+                    <?php endif; ?>
+                    button.disabled = false;
+                    button.textContent = originalText;
+                    return;
+                }
+                
+                // AJAX-Request für die Synchronisation
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', ajaxurl, true);
+                xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+                
+                xhr.onload = function() {
+                    if (xhr.status === 200) {
+                        try {
+                            var response = JSON.parse(xhr.responseText);
+                            
+                            if (response.success) {
+                                button.textContent = '✅ Synchronisiert';
+                                
+                                <?php if ($is_success_active): ?>
+                                var successMessage = 'Felder erfolgreich synchronisiert.';
+                                if (response.data && response.data.message) {
+                                    successMessage = response.data.message;
+                                } else if (response.data && response.data.count) {
+                                    successMessage = 'Felder erfolgreich synchronisiert. (' + response.data.count + ' Terme gesetzt)';
+                                }
+                                
+                                alert(successMessage);
+                                <?php endif; ?>
+                                
+                                // Nach erfolgreicher Synchronisation den Publish-Button klicken
+                                var publishButton = document.getElementById('publish');
+                                if (publishButton) {
+                                    console.log('IR Tours Sync - Klicke Aktualisieren-Button nach erfolgreicher Synchronisation');
+                                    publishButton.click();
+                                } else {
+                                    console.log('IR Tours Sync - Aktualisieren-Button nicht gefunden, lade Seite neu');
+                                    setTimeout(function() {
+                                        window.location.reload();
+                                    }, 1000);
+                                }
+                            } else {
+                                button.textContent = '❌ Fehler';
+                                
+                                <?php if ($is_error_active): ?>
+                                alert('Fehler bei der Synchronisation: ' + (response.data || 'Unbekannter Fehler'));
+                                <?php endif; ?>
+                                
+                                setTimeout(function() {
+                                    button.disabled = false;
+                                    button.textContent = originalText;
+                                }, 2000);
+                            }
+                        } catch (e) {
+                            button.textContent = '❌ Fehler';
+                            
+                            <?php if ($is_error_active): ?>
+                            alert('Fehler beim Verarbeiten der Antwort: ' + e.message);
+                            <?php endif; ?>
+                            
+                            setTimeout(function() {
+                                button.disabled = false;
+                                button.textContent = originalText;
+                            }, 2000);
+                        }
+                    } else {
+                        button.textContent = '❌ Fehler';
+                        
+                        <?php if ($is_error_active): ?>
+                        alert('AJAX-Fehler: ' + xhr.statusText);
+                        <?php endif; ?>
+                        
+                        setTimeout(function() {
+                            button.disabled = false;
+                            button.textContent = originalText;
+                        }, 2000);
+                    }
+                };
+                
+                xhr.onerror = function() {
+                    button.textContent = '❌ Fehler';
+                    
+                    <?php if ($is_error_active): ?>
+                    alert('Netzwerkfehler bei der Anfrage.');
+                    <?php endif; ?>
+                    
+                    setTimeout(function() {
+                        button.disabled = false;
+                        button.textContent = originalText;
+                    }, 2000);
+                };
+                
+                // _wpnonce aus dem Formular holen
+                var nonce = '<?php echo wp_create_nonce('ir_sync_nonce'); ?>';
+                
+                // Daten senden
+                xhr.send('action=ir_manual_sync&post_id=' + postId + '&nonce=' + nonce);
+            }
+            
+            // Führe die Funktion zur Platzierung der Buttons mehrmals aus
+            placeButtonsNextToPublish();
+            setTimeout(placeButtonsNextToPublish, 500);
+            setTimeout(placeButtonsNextToPublish, 1000);
+            setTimeout(placeButtonsNextToPublish, 2000);
+        });
+        </script>
+        <?php
     }
 }
 

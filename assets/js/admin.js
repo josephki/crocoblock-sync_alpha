@@ -34,6 +34,69 @@
         // Select2 initialisieren
         initSelect2();
         
+        // Checkbox-Term Cleanup-Button Event-Listener
+        $('#cleanup-checkbox-terms').on('click', function() {
+            const $button = $(this);
+            const $result = $('#cleanup-result');
+            
+            // Button deaktivieren während der Ausführung
+            $button.prop('disabled', true).text('Bereinige...');
+            $result.html('<span style="color: blue;">Bereinigung läuft...</span>');
+            
+            // AJAX-Anfrage senden
+            $.ajax({
+                url: irSyncAdmin.ajaxurl,
+                type: 'POST',
+                data: {
+                    action: 'ir_cleanup_checkbox_terms',
+                    nonce: irSyncAdmin.nonce
+                },
+                success: function(response) {
+                    debugLog('Checkbox-Term Cleanup-Antwort:', response);
+                    
+                    if (response.success) {
+                        const count = response.data.count;
+                        const message = response.data.message;
+                        
+                        // Erfolgreiche Nachricht anzeigen
+                        if (count > 0) {
+                            $result.html('<span style="color: green;">' + message + '</span>');
+                            
+                            // Detaillierte Liste der gelöschten Terme anzeigen, wenn vorhanden
+                            if (response.data.deleted_terms && response.data.deleted_terms.length > 0) {
+                                const $details = $('<details style="margin-top: 10px;"></details>');
+                                $details.append('<summary>Gelöschte Terme anzeigen</summary>');
+                                
+                                const $list = $('<ul style="margin-top: 5px; max-height: 200px; overflow-y: auto;"></ul>');
+                                $.each(response.data.deleted_terms, function(index, term) {
+                                    $list.append('<li>' + term + '</li>');
+                                });
+                                
+                                $details.append($list);
+                                $result.append($details);
+                            }
+                        } else {
+                            $result.html('<span style="color: blue;">' + message + '</span>');
+                        }
+                    } else {
+                        // Fehlermeldung anzeigen
+                        $result.html('<span style="color: red;">Fehler: ' + (response.data || 'Unbekannter Fehler') + '</span>');
+                    }
+                    
+                    // Button zurücksetzen
+                    $button.prop('disabled', false).text('Checkbox-Terme aufräumen');
+                },
+                error: function(xhr, status, error) {
+                    // Fehlermeldung anzeigen
+                    debugError('Checkbox-Term Cleanup-Fehler:', error);
+                    $result.html('<span style="color: red;">Fehler: ' + error + '</span>');
+                    
+                    // Button zurücksetzen
+                    $button.prop('disabled', false).text('Checkbox-Terme aufräumen');
+                }
+            });
+        });
+        
         // "Neues Mapping hinzufügen"-Button
         $('#add-mapping').on('click', function() {
             debugLog('Neues Mapping hinzufügen');

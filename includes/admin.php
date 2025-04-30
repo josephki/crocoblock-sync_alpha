@@ -30,6 +30,9 @@ class Crocoblock_Sync_Admin {
         // AJAX-Handler für die Feldnamen-Suche
         add_action('wp_ajax_ir_get_field_names', array($this, 'ajax_get_field_names'));
         
+        // AJAX-Handler für die Bereinigung von Checkbox-Termen
+        add_action('wp_ajax_ir_cleanup_checkbox_terms', array($this, 'ajax_cleanup_checkbox_terms'));
+        
         // Debug-Hook - zeigt Debugging-Informationen
         add_action('admin_footer', array($this, 'display_debug_info'));
     }
@@ -435,142 +438,219 @@ class Crocoblock_Sync_Admin {
         }
     }
     
- /**
- * Holt alle Meta-Keys für einen bestimmten Post-Typ mit verbesserter Methode
- * 
- * @param string $post_type Der Post-Typ
- * @return array Array mit Meta-Keys
- */
-private function get_post_meta_keys($post_type) {
-    global $wpdb;
-    
-    // Debug-Log aktivieren
-    $settings = get_option('ir_sync_general_settings', array());
-    $debug_mode = isset($settings['debug_mode']) ? $settings['debug_mode'] : false;
-    
-    if ($debug_mode) {
-        error_log('Crocoblock Sync - Starte Meta-Key-Abfrage für ' . $post_type);
-    }
-    
-    // Methode 1: Direkte Datenbankabfrage - alle Meta-Keys für diesen Post-Typ abrufen
-    $query = $wpdb->prepare(
-        "SELECT DISTINCT pm.meta_key 
-        FROM {$wpdb->postmeta} pm
-        JOIN {$wpdb->posts} p ON p.ID = pm.post_id
-        WHERE p.post_type = %s
-										   
-        ORDER BY pm.meta_key",
-        $post_type
-    );
-    
-    $meta_keys = $wpdb->get_col($query);
-    
-    if ($debug_mode) {
-        error_log('Crocoblock Sync - Meta-Keys aus DB: ' . count($meta_keys) . ' gefunden');
-    }
-    
-    // Methode 2: Alle Posts des Typs abrufen und nach Meta-Feldern suchen
-    $posts = get_posts(array(
-        'post_type' => $post_type,
-        'posts_per_page' => 10, // Begrenzung auf 10 Posts für bessere Performance
-        'post_status' => 'any'
-    ));
-    
-    foreach ($posts as $post) {
-        $post_meta = get_post_meta($post->ID);
-        foreach (array_keys($post_meta) as $meta_key) {
-            if (!in_array($meta_key, $meta_keys)) {
-                $meta_keys[] = $meta_key;
+    /**
+     * AJAX-Handler für die Bereinigung von Checkbox-Termen
+     * Entfernt alle numerischen Checkbox-Terme (checkbox-1, checkbox-2, usw.) aus allen Taxonomien
+     */
+    public function ajax_cleanup_checkbox_terms() {
+        // Sicherheitsüberprüfung
+        check_ajax_referer('ir_sync_admin_nonce', 'nonce');
+        
+        // Nur für Administratoren
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Nicht autorisiert');
+            return;
+        }
+        
+        global $wpdb;
+        
+        // Debug-Modus-Einstellung abrufen
+        $settings = get_option('ir_sync_general_settings', array());
+        $debug_mode = isset($settings['debug_mode']) ? $settings['debug_mode'] : false;
+        
+        if ($debug_mode) {
+            error_log('Crocoblock Sync - Starte Bereinigung von Checkbox-Termen');
+        }
+        
+        // Alle Terme finden, die mit "checkbox-" beginnen
+        $checkbox_terms = $wpdb->get_results(
+            "SELECT t.term_id, t.name, tt.taxonomy 
+             FROM {$wpdb->terms} t 
+             JOIN {$wpdb->term_taxonomy} tt ON t.term_id = tt.term_id 
+             WHERE t.name LIKE 'checkbox-%'"
+        );
+        
+        if (empty($checkbox_terms)) {
+            wp_send_json_success(array(
+                'message' => 'Keine checkbox-Terme gefunden.',
+                'count' => 0
+            ));
+            return;
+        }
+        
+        $count = count($checkbox_terms);
+        $deleted = 0;
+        $deleted_terms = array();
+        
+        // Terme löschen
+        foreach ($checkbox_terms as $term) {
+            // Prüfen ob es sich wirklich um ein numerisches checkbox-Format handelt
+            if (preg_match('/^checkbox-\d+$/', $term->name)) {
+                if (wp_delete_term($term->term_id, $term->taxonomy)) {
+                    $deleted++;
+                    $deleted_terms[] = $term->name . ' (' . $term->taxonomy . ')';
+                    
+                    if ($debug_mode) {
+                        error_log(sprintf(
+                            'Crocoblock Sync - Term %s (ID: %d) aus Taxonomie %s gelöscht',
+                            $term->name,
+                            $term->term_id,
+                            $term->taxonomy
+                        ));
+                    }
+                }
             }
         }
+        
+        // Ergebnis zurückgeben
+        wp_send_json_success(array(
+            'message' => sprintf(
+                '%d von %d checkbox-Termen wurden erfolgreich gelöscht.',
+                $deleted,
+                $count
+            ),
+            'count' => $deleted,
+            'deleted_terms' => $deleted_terms
+        ));
     }
     
-    if ($debug_mode) {
-        error_log('Crocoblock Sync - Meta-Keys nach Post-Abfrage: ' . count($meta_keys) . ' gefunden');
-    }
-    
-    // JetEngine Meta-Boxen spezifisch abfragen
-    if (class_exists('Jet_Engine')) {
-        // Methode 3a: JetEngine-Meta-Boxen direkt über die API abrufen
-        if (function_exists('jet_engine') && method_exists(jet_engine(), 'meta_boxes') && method_exists(jet_engine()->meta_boxes, 'get_meta_boxes')) {
-            try {
-                $meta_boxes = jet_engine()->meta_boxes->get_meta_boxes();
-                
-                if ($debug_mode) {
+    /**
+     * Holt alle Meta-Keys für einen bestimmten Post-Typ mit verbesserter Methode
+     * 
+     * @param string $post_type Der Post-Typ
+     * @return array Array mit Meta-Keys
+     */
+    private function get_post_meta_keys($post_type) {
+        global $wpdb;
+        
+        // Debug-Log aktivieren
+        $settings = get_option('ir_sync_general_settings', array());
+        $debug_mode = isset($settings['debug_mode']) ? $settings['debug_mode'] : false;
+        
+        if ($debug_mode) {
+            error_log('Crocoblock Sync - Starte Meta-Key-Abfrage für ' . $post_type);
+        }
+        
+        // Methode 1: Direkte Datenbankabfrage - alle Meta-Keys für diesen Post-Typ abrufen
+        $query = $wpdb->prepare(
+            "SELECT DISTINCT pm.meta_key 
+            FROM {$wpdb->postmeta} pm
+            JOIN {$wpdb->posts} p ON p.ID = pm.post_id
+            WHERE p.post_type = %s
+										   
+            ORDER BY pm.meta_key",
+            $post_type
+        );
+        
+        $meta_keys = $wpdb->get_col($query);
+        
+        if ($debug_mode) {
+            error_log('Crocoblock Sync - Meta-Keys aus DB: ' . count($meta_keys) . ' gefunden');
+        }
+        
+        // Methode 2: Alle Posts des Typs abrufen und nach Meta-Feldern suchen
+        $posts = get_posts(array(
+            'post_type' => $post_type,
+            'posts_per_page' => 10, // Begrenzung auf 10 Posts für bessere Performance
+            'post_status' => 'any'
+        ));
+        
+        foreach ($posts as $post) {
+            $post_meta = get_post_meta($post->ID);
+            foreach (array_keys($post_meta) as $meta_key) {
+                if (!in_array($meta_key, $meta_keys)) {
+                    $meta_keys[] = $meta_key;
+                }
+            }
+        }
+        
+        if ($debug_mode) {
+            error_log('Crocoblock Sync - Meta-Keys nach Post-Abfrage: ' . count($meta_keys) . ' gefunden');
+        }
+        
+        // JetEngine Meta-Boxen spezifisch abfragen
+        if (class_exists('Jet_Engine')) {
+            // Methode 3a: JetEngine-Meta-Boxen direkt über die API abrufen
+            if (function_exists('jet_engine') && method_exists(jet_engine(), 'meta_boxes') && method_exists(jet_engine()->meta_boxes, 'get_meta_boxes')) {
+                try {
+                    $meta_boxes = jet_engine()->meta_boxes->get_meta_boxes();
+                    
+                    if ($debug_mode) {
 									  
 																				   
-                    error_log('Crocoblock Sync - JetEngine-Metaboxen: ' . (is_array($meta_boxes) ? count($meta_boxes) : 0) . ' gefunden');
+                        error_log('Crocoblock Sync - JetEngine-Metaboxen: ' . (is_array($meta_boxes) ? count($meta_boxes) : 0) . ' gefunden');
 					   
-                }
-                
-                if (is_array($meta_boxes)) {
-                    foreach ($meta_boxes as $meta_box) {
-                        // Prüfen, ob die Meta-Box für diesen Post-Typ gilt
-                        $applies_to_post_type = false;
-                        
-                        if (isset($meta_box['args']['object_type']) && $meta_box['args']['object_type'] === 'post') {
-                            if (isset($meta_box['args']['post_type'])) {
-                                if ($meta_box['args']['post_type'] === 'all' || 
-                                    $meta_box['args']['post_type'] === $post_type || 
-                                    (is_array($meta_box['args']['post_type']) && in_array($post_type, $meta_box['args']['post_type']))) {
-                                    $applies_to_post_type = true;
+                    }
+                    
+                    if (is_array($meta_boxes)) {
+                        foreach ($meta_boxes as $meta_box) {
+                            // Prüfen, ob die Meta-Box für diesen Post-Typ gilt
+                            $applies_to_post_type = false;
+                            
+                            if (isset($meta_box['args']['object_type']) && $meta_box['args']['object_type'] === 'post') {
+                                if (isset($meta_box['args']['post_type'])) {
+                                    if ($meta_box['args']['post_type'] === 'all' || 
+                                        $meta_box['args']['post_type'] === $post_type || 
+                                        (is_array($meta_box['args']['post_type']) && in_array($post_type, $meta_box['args']['post_type']))) {
+                                        $applies_to_post_type = true;
+                                    }
                                 }
                             }
-                        }
-                        
-                        if ($applies_to_post_type && isset($meta_box['meta_fields']) && is_array($meta_box['meta_fields'])) {
-                            foreach ($meta_box['meta_fields'] as $field) {
-                                if (isset($field['name']) && !empty($field['name'])) {
-                                    // Standard-Feld-Name hinzufügen
-                                    if (!in_array($field['name'], $meta_keys)) {
-                                        $meta_keys[] = $field['name'];
-                                    }
-                                    
-                                    // JetEngine speichert Checkboxen im Format "meta[field]" und als Array "field[]"
-                                    $meta_key_with_meta = $field['name'] . '_meta';
-                                    if (!in_array($meta_key_with_meta, $meta_keys)) {
-                                        $meta_keys[] = $meta_key_with_meta;
-                                    }
-                                    
-                                    // Felder für Wiederholungen hinzufügen
-                                    $meta_key_array = $field['name'] . '[]';
-                                    if (!in_array($meta_key_array, $meta_keys)) {
-                                        $meta_keys[] = $meta_key_array;
+                            
+                            if ($applies_to_post_type && isset($meta_box['meta_fields']) && is_array($meta_box['meta_fields'])) {
+                                foreach ($meta_box['meta_fields'] as $field) {
+                                    if (isset($field['name']) && !empty($field['name'])) {
+                                        // Standard-Feld-Name hinzufügen
+                                        if (!in_array($field['name'], $meta_keys)) {
+                                            $meta_keys[] = $field['name'];
+                                        }
+                                        
+                                        // JetEngine speichert Checkboxen im Format "meta[field]" und als Array "field[]"
+                                        $meta_key_with_meta = $field['name'] . '_meta';
+                                        if (!in_array($meta_key_with_meta, $meta_keys)) {
+                                            $meta_keys[] = $meta_key_with_meta;
+                                        }
+                                        
+                                        // Felder für Wiederholungen hinzufügen
+                                        $meta_key_array = $field['name'] . '[]';
+                                        if (!in_array($meta_key_array, $meta_keys)) {
+                                            $meta_keys[] = $meta_key_array;
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
-            } catch (Exception $e) {
-                if ($debug_mode) {
-                    error_log('Crocoblock Sync - Fehler bei JetEngine-Metaboxen: ' . $e->getMessage());
+                } catch (Exception $e) {
+                    if ($debug_mode) {
+                        error_log('Crocoblock Sync - Fehler bei JetEngine-Metaboxen: ' . $e->getMessage());
+                    }
                 }
             }
-        }
-        
-        // Methode 3b: JetEngine Meta-Boxen über die WP-Option abrufen
-        $jet_post_types_option = get_option('jet_engine_meta_boxes', array());
-        if (is_array($jet_post_types_option) && !empty($jet_post_types_option)) {
-            foreach ($jet_post_types_option as $meta_box_data) {
-                if (isset($meta_box_data['args']['object_type']) && $meta_box_data['args']['object_type'] === 'post') {
-                    if (isset($meta_box_data['args']['post_type']) && 
-                        ($meta_box_data['args']['post_type'] === $post_type || 
-                         $meta_box_data['args']['post_type'] === 'all' || 
-                         (is_array($meta_box_data['args']['post_type']) && in_array($post_type, $meta_box_data['args']['post_type'])))) {
-                        
-                        if (isset($meta_box_data['meta_fields']) && is_array($meta_box_data['meta_fields'])) {
-                            foreach ($meta_box_data['meta_fields'] as $field) {
-                                if (isset($field['name']) && !empty($field['name'])) {
-                                    if (!in_array($field['name'], $meta_keys)) {
-                                        $meta_keys[] = $field['name'];
+            
+            // Methode 3b: JetEngine Meta-Boxen über die WP-Option abrufen
+            $jet_post_types_option = get_option('jet_engine_meta_boxes', array());
+            if (is_array($jet_post_types_option) && !empty($jet_post_types_option)) {
+                foreach ($jet_post_types_option as $meta_box_data) {
+                    if (isset($meta_box_data['args']['object_type']) && $meta_box_data['args']['object_type'] === 'post') {
+                        if (isset($meta_box_data['args']['post_type']) && 
+                            ($meta_box_data['args']['post_type'] === $post_type || 
+                             $meta_box_data['args']['post_type'] === 'all' || 
+                             (is_array($meta_box_data['args']['post_type']) && in_array($post_type, $meta_box_data['args']['post_type'])))) {
+                            
+                            if (isset($meta_box_data['meta_fields']) && is_array($meta_box_data['meta_fields'])) {
+                                foreach ($meta_box_data['meta_fields'] as $field) {
+                                    if (isset($field['name']) && !empty($field['name'])) {
+                                        if (!in_array($field['name'], $meta_keys)) {
+                                            $meta_keys[] = $field['name'];
 										 
 																							  
 																					
 										 
-                                    }
-                                    if (!in_array($field['name'] . '_meta', $meta_keys)) {
-                                        $meta_keys[] = $field['name'] . '_meta';
+                                        }
+                                        if (!in_array($field['name'] . '_meta', $meta_keys)) {
+                                            $meta_keys[] = $field['name'] . '_meta';
+                                        }
                                     }
                                 }
                             }
@@ -578,109 +658,108 @@ private function get_post_meta_keys($post_type) {
                     }
                 }
             }
-        }
-        
-        // Methode 3c: JetEngine CPT-Metadaten überprüfen
-        $jet_cpt_option = get_option('jet_engine_meta_boxes', array());
-        if (!empty($jet_cpt_option)) {
-            foreach ($jet_cpt_option as $cpt_data) {
-                if (isset($cpt_data['meta_fields'])) {
-                    foreach ($cpt_data['meta_fields'] as $field) {
-                        if (!empty($field['name'])) {
-                            $meta_keys[] = $field['name'];
-                            $meta_keys[] = $field['name'] . '_meta';
+            
+            // Methode 3c: JetEngine CPT-Metadaten überprüfen
+            $jet_cpt_option = get_option('jet_engine_meta_boxes', array());
+            if (!empty($jet_cpt_option)) {
+                foreach ($jet_cpt_option as $cpt_data) {
+                    if (isset($cpt_data['meta_fields'])) {
+                        foreach ($cpt_data['meta_fields'] as $field) {
+                            if (!empty($field['name'])) {
+                                $meta_keys[] = $field['name'];
+                                $meta_keys[] = $field['name'] . '_meta';
+                            }
                         }
                     }
                 }
             }
         }
-    }
-    
-    if ($debug_mode) {
-        error_log('Crocoblock Sync - Meta-Keys nach JetEngine: ' . count($meta_keys) . ' gefunden');
-    }
-    
-    // Methode 4: ACF-Felder hinzufügen (wenn ACF aktiv ist)
-    if (function_exists('acf_get_field_groups')) {
-        // Verwende die verbesserte ACF-Integration
-        $meta_keys = $this->add_acf_fields($meta_keys, $post_type, $debug_mode);
-    }
-    
-    // Methode 5: Benutzerdefinierte Meta-Felder einbeziehen
-    $custom_fields_option = get_option('ir_sync_custom_meta_fields', array());
-    
-    // Standard-Werte für die Option, falls sie noch nicht existiert
-    if (empty($custom_fields_option)) {
-        $default_fields = array(
-            'reisethemen_meta', 'reisethemen', 'kontinent', 'kontinent_meta', 
-            'land', 'land_meta', 'reiseziel', 'reiseziel_meta', 'destination', 
-            'destination_meta', 'theme', 'theme_meta', 'continent', 'continent_meta', 
-            'country', 'country_meta', 'region', 'region_meta'
-        );
         
+        if ($debug_mode) {
+            error_log('Crocoblock Sync - Meta-Keys nach JetEngine: ' . count($meta_keys) . ' gefunden');
+        }
+        
+        // Methode 4: ACF-Felder hinzufügen (wenn ACF aktiv ist)
+        if (function_exists('acf_get_field_groups')) {
+            // Verwende die verbesserte ACF-Integration
+            $meta_keys = $this->add_acf_fields($meta_keys, $post_type, $debug_mode);
+        }
+        
+        // Methode 5: Benutzerdefinierte Meta-Felder einbeziehen
+        $custom_fields_option = get_option('ir_sync_custom_meta_fields', array());
+        
+        // Standard-Werte für die Option, falls sie noch nicht existiert
+        if (empty($custom_fields_option)) {
+            $default_fields = array(
+                'reisethemen_meta', 'reisethemen', 'kontinent', 'kontinent_meta', 
+                'land', 'land_meta', 'reiseziel', 'reiseziel_meta', 'destination', 
+                'destination_meta', 'theme', 'theme_meta', 'continent', 'continent_meta', 
+                'country', 'country_meta', 'region', 'region_meta'
+            );
+            
 																		 
 										   
-        update_option('ir_sync_custom_meta_fields', $default_fields);
-        $custom_fields_option = $default_fields;
-    }
-    
-    // Filter hinzufügen, damit andere Plugins die Liste erweitern können
+            update_option('ir_sync_custom_meta_fields', $default_fields);
+            $custom_fields_option = $default_fields;
+        }
+        
+        // Filter hinzufügen, damit andere Plugins die Liste erweitern können
 			  
 			
-    $custom_fields = apply_filters('crocoblock_sync_custom_meta_fields', $custom_fields_option, $post_type);
-    
-    // Benutzerdefinierte Felder zur Liste hinzufügen
-    foreach ($custom_fields as $field) {
-        if (!in_array($field, $meta_keys)) {
-            $meta_keys[] = $field;
-        }
-    }
-    
-    // Spezifische Felder für ir-tours
-    if ($post_type === 'ir-tours') {
-        $ir_tours_fields = array(
-            'reisethemen', 'reisethemen_meta',
-            'kontinent', 'kontinent_meta',
-            'land', 'land_meta',
-            'reiseziel', 'reiseziel_meta',
-            'destination', 'destination_meta',
-            'theme', 'theme_meta',
-            'continent', 'continent_meta',
-            'country', 'country_meta',
-            'region', 'region_meta'
-        );
+        $custom_fields = apply_filters('crocoblock_sync_custom_meta_fields', $custom_fields_option, $post_type);
         
-														  
-        foreach ($ir_tours_fields as $field) {
+        // Benutzerdefinierte Felder zur Liste hinzufügen
+        foreach ($custom_fields as $field) {
             if (!in_array($field, $meta_keys)) {
                 $meta_keys[] = $field;
             }
         }
-    }
-    
-    // Einmalige Filterung und Bereinigung
-    $unique_meta_keys = array();
-    foreach ($meta_keys as $key) {
-        $key = trim($key);
-        if (!empty($key) && !in_array($key, $unique_meta_keys)) {
+        
+        // Spezifische Felder für ir-tours
+        if ($post_type === 'ir-tours') {
+            $ir_tours_fields = array(
+                'reisethemen', 'reisethemen_meta',
+                'kontinent', 'kontinent_meta',
+                'land', 'land_meta',
+                'reiseziel', 'reiseziel_meta',
+                'destination', 'destination_meta',
+                'theme', 'theme_meta',
+                'continent', 'continent_meta',
+                'country', 'country_meta',
+                'region', 'region_meta'
+            );
+            
+														  
+            foreach ($ir_tours_fields as $field) {
+                if (!in_array($field, $meta_keys)) {
+                    $meta_keys[] = $field;
+                }
+            }
+        }
+        
+        // Einmalige Filterung und Bereinigung
+        $unique_meta_keys = array();
+        foreach ($meta_keys as $key) {
+            $key = trim($key);
+            if (!empty($key) && !in_array($key, $unique_meta_keys)) {
 																					
 						   
-            $unique_meta_keys[] = $key;
+                $unique_meta_keys[] = $key;
 			   
-        }
+            }
 		
 						  
+        }
+        
+        // Liste sortieren
+        sort($unique_meta_keys);
+        
+        if ($debug_mode) {
+            error_log('Crocoblock Sync - Finale Meta-Key-Liste: ' . count($unique_meta_keys) . ' Felder gefunden');
+        }
+        
+        return $unique_meta_keys;
     }
-    
-    // Liste sortieren
-    sort($unique_meta_keys);
-    
-    if ($debug_mode) {
-        error_log('Crocoblock Sync - Finale Meta-Key-Liste: ' . count($unique_meta_keys) . ' Felder gefunden');
-    }
-    
-    return $unique_meta_keys;
-}
     
     /**
      * ACF-Felder hinzufügen (verbesserte Integration für ACF und ACF Pro)
@@ -969,10 +1048,18 @@ private function get_post_meta_keys($post_type) {
     }
     
     /**
-     * Render-Funktion für allgemeine Einstellungen
+     * Rendert den allgemeinen Einstellungsbereich
      */
     public function render_general_section() {
-        echo '<p>Grundlegende Einstellungen für das Plugin.</p>';
+        echo '<p>' . __('Allgemeine Einstellungen für die Crocoblock-Synchronisation.', 'crocoblock-sync') . '</p>';
+        
+        // Button zum Entfernen von checkbox-N Termen
+        echo '<div class="cleanup-checkbox-terms-section">';
+        echo '<h3>' . __('Aufräumen', 'crocoblock-sync') . '</h3>';
+        echo '<p>' . __('Entfernt alle numerischen Checkbox-Terme (checkbox-1, checkbox-2, usw.) aus allen Taxonomien.', 'crocoblock-sync') . '</p>';
+        echo '<button type="button" id="cleanup-checkbox-terms" class="button button-secondary">' . __('Checkbox-Terme aufräumen', 'crocoblock-sync') . '</button>';
+        echo '<span id="cleanup-result" style="margin-left: 10px; display: inline-block;"></span>';
+        echo '</div>';
     }
     
     /**
@@ -1167,8 +1254,25 @@ private function get_post_meta_keys($post_type) {
             'terms_created' => 'Neue Terms erstellt: %s'
         );
         
-        $message = isset($messages[$message_key]) ? $messages[$message_key] : $default_messages[$message_key];
+        // Standard-Aktivierungszustand
+        $default_active = array(
+            'multiple_themes' => true,
+            'sync_button' => true,
+            'sync_reminder' => true,
+            'sync_success' => true,
+            'sync_error' => true,
+            'terms_created' => true
+        );
         
+        $message = isset($messages[$message_key]) ? $messages[$message_key] : $default_messages[$message_key];
+        $is_active = isset($messages[$message_key . '_active']) ? $messages[$message_key . '_active'] : $default_active[$message_key];
+        
+        // Checkbox zum Aktivieren/Deaktivieren der Nachricht
+        echo '<div style="margin-bottom: 5px;">';
+        echo '<label><input type="checkbox" name="ir_sync_messages[' . esc_attr($message_key) . '_active]" value="1" ' . checked($is_active, true, false) . ' /> Nachricht aktivieren</label>';
+        echo '</div>';
+        
+        // Textfeld für die Nachricht
         echo '<textarea name="ir_sync_messages[' . esc_attr($message_key) . ']" rows="2" cols="80" class="large-text">' . esc_textarea($message) . '</textarea>';
         
         if ($message_key === 'sync_success') {
@@ -1367,8 +1471,13 @@ private function get_post_meta_keys($post_type) {
             'terms_created' => 'Neue Terms erstellt: %s'
         );
         
+        // Nachrichtentexte verarbeiten
         foreach ($default_messages as $key => $default) {
             $sanitized_input[$key] = isset($input[$key]) ? sanitize_text_field($input[$key]) : $default;
+            
+            // Aktivierungszustand verarbeiten (mit _active Suffix)
+            $active_key = $key . '_active';
+            $sanitized_input[$active_key] = isset($input[$active_key]) ? (bool)$input[$active_key] : true;
         }
         
         return $sanitized_input;

@@ -2,24 +2,108 @@
  * Editor-Stile für IR Tours Sync
  */
 
-/* Sync Button */
+/* Sync Button - allgemein */
 .ir-sync-button-added {
     margin: 10px 0;
+    display: inline-block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
 }
 
 .ir-sync-button {
     display: inline-flex !important;
-    align-items: center;
-    justify-content: center;
-    min-height: 32px;
+    align-items: center !important;
+    justify-content: center !important;
+    min-height: 32px !important;
     padding: 0 12px !important;
+    background-color: #007cba !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: 3px !important;
+    cursor: pointer !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+.ir-sync-button:hover {
+    background-color: #0071a1 !important;
+    color: #fff !important;
+}
+
+/* Im klassischen Editor - direkter und spezifischer Selektor */
+#publishing-action .ir-sync-button,
+#submitdiv .ir-sync-button {
+    display: inline-block !important;
+    vertical-align: middle !important;
+    margin-right: 10px !important;
+    margin-left: 0 !important;
+    min-height: 30px !important;
+    line-height: 28px !important;
+    font-size: 13px !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    z-index: 100 !important;
+}
+
+/* Spezifische Styles für den blauen Button */
+#ir-sync-direct-button {
+    display: inline-block !important;
+    vertical-align: middle !important;
+    margin-right: 5px !important;
+    min-height: 30px !important;
+    line-height: 2.15384615 !important;
+    padding: 0 10px !important;
+    background-color: #2271b1 !important;
+    color: white !important;
+    border-color: #2271b1 !important;
+    font-weight: bold !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    box-shadow: none !important;
+    text-align: center !important;
+    position: relative !important;
+    text-decoration: none !important;
+    font-size: 13px !important;
+    z-index: 100 !important;
+}
+
+/* Hover-Styles für den blauen Button */
+#ir-sync-direct-button:hover {
+    background-color: #135e96 !important;
+    color: white !important;
+    border-color: #135e96 !important;
+}
+
+/* Klassischer Editor - Publishing-Action Container */
+#publishing-action {
+    white-space: nowrap !important;
+    overflow: visible !important;
+    position: relative !important;
+    text-align: right !important;
+    line-height: normal !important;
+}
+
+/* button-secondary Klasse für klassischen Editor */
+.button-secondary.ir-sync-button {
+    background-color: #f7f7f7 !important;
+    border: 1px solid #ccc !important;
+    color: #555 !important;
+    box-shadow: 0 1px 0 #ccc !important;
+}
+
+.button-secondary.ir-sync-button:hover {
+    background-color: #fafafa !important;
+    border-color: #999 !important;
+    color: #23282d !important;
 }
 
 /* Status-Anzeige */
 .ir-sync-status {
-    display: inline-block;
-    margin-left: 10px;
-    font-size: 0.9em;
+    display: inline-block !important;
+    margin-left: 10px !important;
+    font-size: 0.9em !important;
+    visibility: visible !important;
+    opacity: 1 !important;
 }
 
 /* Elementor-Anpassungen */
@@ -43,4 +127,60 @@
 
 .is-dark-theme .ir-sync-button-added {
     background: rgba(255, 255, 255, 0.1);
+}
+
+/* Weitere spezifische Fixes für die Button-Positionierung */
+#publishing-action button + #publish,
+#publishing-action input + #publish {
+    margin-left: 0 !important;
+}
+
+/* Zeilenumbrüche im publish-action Container verhindern */
+#publishing-action {
+    display: inline-flex !important;
+    justify-content: flex-end !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    float: right !important;
+    text-align: right !important;
+    margin-top: 5px !important;
+}
+
+#ir-sync-direct-button {
+    float: none !important;
+    position: relative !important;
+    top: 0 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+}
+
+#publish {
+    float: none !important;
+    position: relative !important;
+    top: 0 !important;
+    margin-top: 0 !important;
+}
+
+/* Allgemeine Ausrichtungskorrektur für submitbox */
+.submitbox {
+    overflow: visible !important;
+}
+
+@media screen and (max-width: 782px) {
+    /* Responsive Anpassungen für mobile Geräte */
+    #publishing-action {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: stretch !important;
+    }
+    
+    #ir-sync-direct-button {
+        margin-bottom: 10px !important;
+        width: 100% !important;
+        margin-right: 0 !important;
+    }
+    
+    #publish {
+        width: 100% !important;
+    }
 }

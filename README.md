@@ -87,15 +87,6 @@ Joseph Kisler - Webwerkstatt, Freiung 16/2/4, A-4600 Wels
 
 ## Versionsverlauf
 
-### 1.3
-- Verbesserte Behandlung leerer Meta-Feld-Werte zur Vermeidung verwaister Datenbankeinträge
-- Konsequentes Löschen leerer Taxonomie-Terme bei der Synchronisation
-- Direktes Entfernen von Term-Beziehungen aus der Datenbank statt nur über WordPress-Funktionen
-- Vollständige Löschung leerer Meta-Felder aus der Datenbank
-- Korrektur der Behandlung von Meta-Feldern in der Schnellbearbeitung (Quick Edit)
-- Umstellung auf konsequentes Ersetzen statt Anhängen von Termen, um verwaiste Einträge zu vermeiden
-- Bessere Datenbank-Konsistenz durch Aktualisierung der Term-Zähler nach Löschvorgängen
-
 ### 1.2
 - Verbessertes Seitenaktualisierungssystem mit strikter Typ- und URL-Validierung
 - Vermeidung unerwünschter wiederholter Refreshes
